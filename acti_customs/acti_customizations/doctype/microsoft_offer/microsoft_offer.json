@@ -1,0 +1,210 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:offer_key",
+ "creation": "2025-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "identity_section",
+  "product_id",
+  "sku_id",
+  "term_duration",
+  "billing_plan",
+  "segment",
+  "col_break_identity",
+  "offer_key",
+  "item",
+  "is_active",
+  "commercial_section",
+  "product_title",
+  "sku_title",
+  "col_break_commercial",
+  "market",
+  "currency",
+  "unit_price",
+  "validity_section",
+  "effective_start_date",
+  "effective_end_date",
+  "col_break_validity",
+  "change_indicator",
+  "tags"
+ ],
+ "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Identidad tecnica"
+  },
+  {
+   "fieldname": "product_id",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Product Id",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "sku_id",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Sku Id",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "term_duration",
+   "fieldtype": "Data",
+   "label": "Term Duration",
+   "reqd": 1
+  },
+  {
+   "fieldname": "billing_plan",
+   "fieldtype": "Data",
+   "label": "Billing Plan",
+   "reqd": 1
+  },
+  {
+   "fieldname": "segment",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Segment",
+   "options": "Commercial\nEducation\nCharity",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_break_identity",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "offer_key",
+   "fieldtype": "Data",
+   "label": "Offer Key",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1,
+   "in_standard_filter": 1,
+   "description": "Clave tecnica determinista ProductId|SkuId|TermDuration|BillingPlan|Segment. Es el name del documento. No usar titulos (cambian entre versiones)."
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "label": "Item ERPNext",
+   "options": "Item",
+   "read_only": 1,
+   "description": "Item materializado (1:1). Vacio si aun no se ha creado el Item."
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Activa en catalogo",
+   "description": "1 = presente en la ultima version sincronizada del catalogo. La sincronizacion la pone en 0 cuando una oferta deja de venir (sin borrar el Item). Distinto de la vigencia por fechas."
+  },
+  {
+   "fieldname": "commercial_section",
+   "fieldtype": "Section Break",
+   "label": "Identidad comercial"
+  },
+  {
+   "fieldname": "product_title",
+   "fieldtype": "Data",
+   "label": "Product Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sku_title",
+   "fieldtype": "Data",
+   "label": "Sku Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "col_break_commercial",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "MX",
+   "fieldname": "market",
+   "fieldtype": "Data",
+   "label": "Market",
+   "reqd": 1
+  },
+  {
+   "default": "USD",
+   "fieldname": "currency",
+   "fieldtype": "Data",
+   "label": "Currency",
+   "reqd": 1
+  },
+  {
+   "fieldname": "unit_price",
+   "fieldtype": "Currency",
+   "label": "Unit Price",
+   "options": "currency",
+   "description": "Precio vigente del catalogo. Vive aqui (no en la identidad historica del Item)."
+  },
+  {
+   "fieldname": "validity_section",
+   "fieldtype": "Section Break",
+   "label": "Vigencia"
+  },
+  {
+   "fieldname": "effective_start_date",
+   "fieldtype": "Date",
+   "label": "Effective Start Date"
+  },
+  {
+   "fieldname": "effective_end_date",
+   "fieldtype": "Date",
+   "label": "Effective End Date"
+  },
+  {
+   "fieldname": "col_break_validity",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "change_indicator",
+   "fieldtype": "Data",
+   "label": "Change Indicator",
+   "description": "ChangeIndicator del catalogo (New/Update/...). Insumo para la politica de actualizacion."
+  },
+  {
+   "fieldname": "tags",
+   "fieldtype": "Small Text",
+   "label": "Tags"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2025-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "ACTI Customizations",
+ "name": "Microsoft Offer",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales User"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
