@@ -78,11 +78,18 @@ def _ensure_prereqs():
 		# El site de CI (erpnext sin setup wizard) puede no tener la raíz "All Item Groups".
 		parent = frappe.db.get_value("Item Group", {"is_group": 1}, "name")
 		if not parent:
-			root = frappe.get_doc({"doctype": "Item Group", "item_group_name": "All Item Groups", "is_group": 1})
+			root = frappe.get_doc(
+				{"doctype": "Item Group", "item_group_name": "All Item Groups", "is_group": 1}
+			)
 			root.insert(ignore_permissions=True)
 			parent = root.name
 		frappe.get_doc(
-			{"doctype": "Item Group", "item_group_name": ITEM_GROUP, "parent_item_group": parent, "is_group": 0}
+			{
+				"doctype": "Item Group",
+				"item_group_name": ITEM_GROUP,
+				"parent_item_group": parent,
+				"is_group": 0,
+			}
 		).insert(ignore_permissions=True)
 
 
