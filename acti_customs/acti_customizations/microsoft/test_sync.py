@@ -106,7 +106,7 @@ class TestSync(FrappeTestCase):
 			frappe.delete_doc("Microsoft Offer", name, force=True, ignore_permissions=True)
 		if frappe.db.exists("Item", "MS-CFQ7X1-1"):
 			frappe.delete_doc("Item", "MS-CFQ7X1-1", force=True, ignore_permissions=True)
-		frappe.db.commit()
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- limpieza de test (el sync commitea)
 
 	def _xlsx(self, rows, columns=COLUMNS, sheet=SHEET):
 		fd, path = tempfile.mkstemp(suffix=".xlsx")

@@ -15,6 +15,7 @@ Preflight fail-closed antes de aplicar si falta una dependencia.
 """
 
 import frappe
+from frappe import _
 from frappe.utils import cint, flt
 
 from acti_customs.acti_customizations.microsoft.catalog import SHEET, CatalogError, read_catalog
@@ -203,12 +204,12 @@ def _apply(plan):
 			mat_errors.append({"offer_key": key, "error": str(exc)})
 		n += 1
 		if n % 200 == 0:
-			frappe.db.commit()
+			frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
 
 	for key in plan["to_inactivate"]:
 		frappe.db.set_value("Microsoft Offer", key, "is_active", 0)
 		inactivated += 1
-	frappe.db.commit()
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- commit final controlado del apply
 	return {
 		"offers_created": created,
 		"offers_updated": updated,
@@ -298,9 +299,9 @@ def refresh_microsoft_item_names(dry_run=True):
 			unchanged += 1
 		n += 1
 		if not dry_run and n % 500 == 0:
-			frappe.db.commit()
+			frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
 	if not dry_run:
-		frappe.db.commit()
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
 	lengths.sort()
 	stats = {}
 	if lengths:
@@ -324,7 +325,7 @@ def refresh_microsoft_item_names(dry_run=True):
 
 
 @frappe.whitelist()
-def run_sync_from_single(dry_run=1):
+def run_sync_from_single(dry_run: int = 1):
 	"""Ejecuta la sincronizacion usando el archivo adjunto en 'Microsoft Catalog Sync'.
 
 	Llamado por los botones Dry Run / Aplicar del DocType Single. Solo System Manager.
@@ -333,7 +334,7 @@ def run_sync_from_single(dry_run=1):
 	dry_run = bool(cint(dry_run))
 	file_url = frappe.db.get_single_value("Microsoft Catalog Sync", "catalog_file")
 	if not file_url:
-		frappe.throw("Adjunte el archivo .xlsx del catalogo Microsoft primero.")
+		frappe.throw(_("Adjunte el archivo .xlsx del catalogo Microsoft primero."))
 	file_doc = frappe.get_doc("File", {"file_url": file_url})
 	report = sync_microsoft_catalog(file_doc.get_full_path(), dry_run=dry_run)
 	single = frappe.get_single("Microsoft Catalog Sync")

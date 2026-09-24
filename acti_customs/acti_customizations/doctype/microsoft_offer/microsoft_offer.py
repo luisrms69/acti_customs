@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
 from frappe.utils import getdate, today
 
@@ -35,10 +36,12 @@ class MicrosoftOffer(Document):
 			self.product_id, self.sku_id, self.term_duration, self.billing_plan, self.segment
 		)
 		if self.segment not in VALID_SEGMENTS:
-			frappe.throw(f"Segment invalido: {self.segment!r}. Debe ser uno de {VALID_SEGMENTS}.")
+			frappe.throw(
+				_("Segment invalido: {0}. Debe ser uno de {1}.").format(self.segment, VALID_SEGMENTS)
+			)
 		if self.effective_start_date and self.effective_end_date:
 			if getdate(self.effective_end_date) < getdate(self.effective_start_date):
-				frappe.throw("Effective End Date no puede ser anterior a Effective Start Date.")
+				frappe.throw(_("Effective End Date no puede ser anterior a Effective Start Date."))
 
 	def expected_item_code(self):
 		"""item_code determinista que le corresponde a esta oferta (no crea el Item)."""
