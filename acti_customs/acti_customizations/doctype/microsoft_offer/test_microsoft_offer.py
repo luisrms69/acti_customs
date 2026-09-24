@@ -89,6 +89,22 @@ class TestKeys(FrappeTestCase):
 			build_display_name("Foo", "P1M", "None", "Commercial"), "Foo | 1 mes | None | Commercial"
 		)
 
+	def test_display_name_trial_combined(self):
+		# P1M + None + Trial (validado por Tags) -> 'Prueba 1 mes', sin componente 'None'.
+		name = build_display_name(
+			"Agent 365 (Education Faculty Pricing)", "P1M", "None", "Education", tags="License;Trial"
+		)
+		self.assertEqual(name, "Agent 365 (Education Faculty Pricing) | Prueba 1 mes | Education")
+		self.assertNotIn("None", name)
+		self.assertEqual(len(name.split(" | ")), 3)
+
+	def test_display_name_none_without_trial_tag_kept(self):
+		# P1M + None SIN tag Trial -> se conserva 'None' (no se asume Trial).
+		self.assertEqual(
+			build_display_name("Foo", "P1M", "None", "Commercial", tags="License"),
+			"Foo | 1 mes | None | Commercial",
+		)
+
 	def test_display_name_capped_middle_truncates_only_sku(self):
 		long_sku = "Dynamics 365 Operations - Sandbox Tier 4:Standard Performance Testing (Education Faculty Pricing)"
 		# maxlen reducido para forzar el truncado del SkuTitle de forma determinista.

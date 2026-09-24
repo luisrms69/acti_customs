@@ -48,7 +48,9 @@ class MicrosoftOffer(Document):
 
 	def expected_item_name(self):
 		"""item_name (<=140): SkuTitle | compromiso | facturacion | segmento (abrevia solo SkuTitle)."""
-		return build_display_name_capped(self.sku_title, self.term_duration, self.billing_plan, self.segment)
+		return build_display_name_capped(
+			self.sku_title, self.term_duration, self.billing_plan, self.segment, self.tags
+		)
 
 	def is_vigente(self, on_date=None):
 		"""True si la oferta es comercialmente vigente en `on_date` (default hoy).

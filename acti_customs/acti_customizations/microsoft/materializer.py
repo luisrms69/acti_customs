@@ -96,7 +96,7 @@ def _build_item(offer, item_code):
 	# (abrevia solo el SkuTitle). NO es la fuente de identidad; la completa vive en
 	# ms_offer_label + ms_*.
 	item.item_name = build_display_name_capped(
-		offer.sku_title, offer.term_duration, offer.billing_plan, offer.segment
+		offer.sku_title, offer.term_duration, offer.billing_plan, offer.segment, offer.tags
 	)
 	item.item_group = ITEM_GROUP
 	item.stock_uom = STOCK_UOM

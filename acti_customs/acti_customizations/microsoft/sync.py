@@ -260,22 +260,35 @@ def refresh_microsoft_item_names(dry_run=True):
 	longitud del nombre completo (sin capar) y conteos de actualizacion.
 	"""
 	dry_run = bool(cint(dry_run)) if not isinstance(dry_run, bool) else dry_run
+	# Tags viven en Microsoft Offer (no en el Item); mapa offer_key -> tags para la regla Trial.
+	offer_tags = dict(frappe.get_all("Microsoft Offer", fields=["name", "tags"], as_list=True))
 	items = frappe.get_all(
 		"Item",
 		filters={"ms_offer_key": ["is", "set"]},
-		fields=["name", "item_name", "ms_sku_title", "ms_term_duration", "ms_billing_plan", "ms_segment"],
+		fields=[
+			"name",
+			"item_name",
+			"ms_offer_key",
+			"ms_sku_title",
+			"ms_term_duration",
+			"ms_billing_plan",
+			"ms_segment",
+		],
 	)
 	lengths = []
 	over_140 = 0
 	updated = unchanged = 0
 	n = 0
 	for it in items:
-		full = build_display_name(it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment)
+		tags = offer_tags.get(it.ms_offer_key)
+		full = build_display_name(
+			it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment, tags
+		)
 		lengths.append(len(full))
 		if len(full) > 140:
 			over_140 += 1
 		capped = build_display_name_capped(
-			it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment
+			it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment, tags
 		)
 		if capped != (it.item_name or ""):
 			if not dry_run:
