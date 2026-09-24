@@ -18,7 +18,12 @@ import frappe
 from frappe.utils import cint, flt
 
 from acti_customs.acti_customizations.microsoft.catalog import SHEET, CatalogError, read_catalog
-from acti_customs.acti_customizations.microsoft.keys import OfferKeyError, build_offer_key
+from acti_customs.acti_customizations.microsoft.keys import (
+	OfferKeyError,
+	build_display_name,
+	build_display_name_capped,
+	build_offer_key,
+)
 from acti_customs.acti_customizations.microsoft.materializer import (
 	ITEM_GROUP,
 	STOCK_UOM,
@@ -245,6 +250,61 @@ def sync_microsoft_catalog(file_path, dry_run=True):
 	if not dry_run:
 		report["applied"] = _apply(plan)
 	return report
+
+
+def refresh_microsoft_item_names(dry_run=True):
+	"""Re-aplica item_name (nuevo naming) a los Items Microsoft ya creados.
+
+	Solo actualiza `item_name` de Items con ms_offer_key (excluye legacy). NO toca
+	item_code, ms_*, offer_key, links ni metadata estandar. Devuelve estadisticas de
+	longitud del nombre completo (sin capar) y conteos de actualizacion.
+	"""
+	dry_run = bool(cint(dry_run)) if not isinstance(dry_run, bool) else dry_run
+	items = frappe.get_all(
+		"Item",
+		filters={"ms_offer_key": ["is", "set"]},
+		fields=["name", "item_name", "ms_sku_title", "ms_term_duration", "ms_billing_plan", "ms_segment"],
+	)
+	lengths = []
+	over_140 = 0
+	updated = unchanged = 0
+	n = 0
+	for it in items:
+		full = build_display_name(it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment)
+		lengths.append(len(full))
+		if len(full) > 140:
+			over_140 += 1
+		capped = build_display_name_capped(
+			it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment
+		)
+		if capped != (it.item_name or ""):
+			if not dry_run:
+				frappe.db.set_value("Item", it.name, "item_name", capped, update_modified=False)
+			updated += 1
+		else:
+			unchanged += 1
+		n += 1
+		if not dry_run and n % 500 == 0:
+			frappe.db.commit()
+	if not dry_run:
+		frappe.db.commit()
+	lengths.sort()
+	stats = {}
+	if lengths:
+		stats = {
+			"min": lengths[0],
+			"avg": round(sum(lengths) / len(lengths), 1),
+			"p95": lengths[min(len(lengths) - 1, int(len(lengths) * 0.95))],
+			"max": lengths[-1],
+			"full_over_140": over_140,
+		}
+	return {
+		"dry_run": dry_run,
+		"items_microsoft": len(items),
+		"item_name_updated": updated,
+		"item_name_unchanged": unchanged,
+		"full_name_length": stats,
+	}
 
 
 # --- Mecanismo de carga nativo (UI): wrapper whitelisted para el DocType Single ---

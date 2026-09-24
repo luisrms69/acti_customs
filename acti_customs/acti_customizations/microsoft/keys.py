@@ -137,3 +137,61 @@ def build_item_name_capped(
 	return NAME_SEP.join(
 		[pt_c, _norm(product_id), sk_c, _norm(term_duration), _norm(billing_plan), _norm(segment)]
 	)
+
+
+# ---------------------------------------------------------------------------
+# item_name definitivo (display): <SkuTitle> | <compromiso> | <facturacion> | <segmento>
+# NO usa ProductTitle/ProductId. La representacion completa de 6 atributos queda en
+# ms_offer_label (build_item_name). Los valores no mapeados se conservan crudos
+# (deterministico), no se inventan.
+# ---------------------------------------------------------------------------
+
+FRIENDLY_TERM = {"P1M": "1 mes", "P1Y": "1 año", "P3Y": "3 años"}
+FRIENDLY_BILLING = {"Monthly": "mensual", "Annual": "anual", "Triennial": "cada 3 años"}
+DISPLAY_SEP = " | "
+
+
+def friendly_term(value):
+	v = _norm(value)
+	return FRIENDLY_TERM.get(v, v)
+
+
+def friendly_billing(value):
+	v = _norm(value)
+	return FRIENDLY_BILLING.get(v, v)
+
+
+def build_display_name(sku_title, term_duration, billing_plan, segment):
+	"""Display completo (sin capar): SkuTitle | compromiso | facturacion | segmento."""
+	return DISPLAY_SEP.join(
+		[_norm(sku_title), friendly_term(term_duration), friendly_billing(billing_plan), _norm(segment)]
+	)
+
+
+def _middle_trunc(text, budget):
+	"""Trunca en el MEDIO conservando inicio y fin (mas informativo)."""
+	if budget <= 0:
+		return ""
+	if len(text) <= budget:
+		return text
+	if budget <= len(_ELLIPSIS):
+		return text[:budget]
+	keep = budget - len(_ELLIPSIS)
+	head = (keep + 1) // 2
+	tail = keep - head
+	return text[:head] + _ELLIPSIS + (text[-tail:] if tail else "")
+
+
+def build_display_name_capped(sku_title, term_duration, billing_plan, segment, maxlen=ITEM_NAME_MAXLEN):
+	"""item_name <= maxlen; abrevia SOLO el SkuTitle (truncado en medio).
+
+	compromiso/facturacion/segmento quedan siempre completos. El SkuTitle completo
+	permanece en ms_sku_title y en ms_offer_label.
+	"""
+	full = build_display_name(sku_title, term_duration, billing_plan, segment)
+	if len(full) <= maxlen:
+		return full
+	ft, fb, seg = friendly_term(term_duration), friendly_billing(billing_plan), _norm(segment)
+	fixed = len(ft) + len(fb) + len(seg) + 3 * len(DISPLAY_SEP)
+	sku = _middle_trunc(_norm(sku_title), maxlen - fixed)
+	return DISPLAY_SEP.join([sku, ft, fb, seg])

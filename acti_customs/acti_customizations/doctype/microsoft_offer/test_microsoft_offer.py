@@ -7,6 +7,8 @@ from frappe.tests.utils import FrappeTestCase
 from acti_customs.acti_customizations.microsoft.keys import (
 	ITEM_NAME_MAXLEN,
 	OfferKeyError,
+	build_display_name,
+	build_display_name_capped,
 	build_item_code,
 	build_item_name,
 	build_item_name_capped,
@@ -66,6 +68,42 @@ class TestKeys(FrappeTestCase):
 		self.assertIn("…", capped)
 		# Estructura de 6 componentes.
 		self.assertEqual(len(capped.split(" | ")), 6)
+
+	# --- item_name definitivo (display) ---
+	def test_display_name_friendly(self):
+		self.assertEqual(
+			build_display_name("Power BI Pro", "P1Y", "Annual", "Commercial"),
+			"Power BI Pro | 1 año | anual | Commercial",
+		)
+		self.assertEqual(
+			build_display_name("Office 365 A3", "P1M", "Monthly", "Education"),
+			"Office 365 A3 | 1 mes | mensual | Education",
+		)
+		self.assertEqual(
+			build_display_name("X", "P3Y", "Triennial", "Charity"), "X | 3 años | cada 3 años | Charity"
+		)
+
+	def test_display_name_unmapped_value_kept_raw(self):
+		# billing_plan 'None' (valor real del catalogo) no se inventa: se conserva crudo.
+		self.assertEqual(
+			build_display_name("Foo", "P1M", "None", "Commercial"), "Foo | 1 mes | None | Commercial"
+		)
+
+	def test_display_name_capped_middle_truncates_only_sku(self):
+		long_sku = "Dynamics 365 Operations - Sandbox Tier 4:Standard Performance Testing (Education Faculty Pricing)"
+		# maxlen reducido para forzar el truncado del SkuTitle de forma determinista.
+		capped = build_display_name_capped(long_sku, "P1M", "Monthly", "Education", maxlen=60)
+		self.assertLessEqual(len(capped), 60)
+		parts = capped.split(" | ")
+		self.assertEqual(len(parts), 4)
+		# compromiso/facturacion/segmento intactos:
+		self.assertEqual(parts[1], "1 mes")
+		self.assertEqual(parts[2], "mensual")
+		self.assertEqual(parts[3], "Education")
+		# truncado en MEDIO del SkuTitle: conserva inicio y fin.
+		self.assertIn("…", parts[0])
+		self.assertTrue(parts[0].startswith("Dynamics 365"))
+		self.assertTrue(parts[0].endswith(")"))
 
 
 class TestMicrosoftOffer(FrappeTestCase):

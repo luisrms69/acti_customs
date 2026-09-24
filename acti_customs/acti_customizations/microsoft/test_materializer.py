@@ -108,14 +108,17 @@ class TestMaterializer(FrappeTestCase):
 		self.assertEqual(item.ms_market, "MX")
 		self.assertEqual(item.ms_currency, "USD")
 
-	def test_item_name_capped_and_offer_label(self):
+	def test_item_name_display_and_offer_label(self):
 		offer = self._offer()
 		item = frappe.get_doc("Item", materialize_item(offer))
-		full = "Office 365 E3 | CFQ7TTC0LH2Z | Office 365 E3 Sku | P3Y | Triennial | Commercial"
-		# item_name estandar: <=140 y legible (no la fuente de identidad completa).
+		# item_name: SkuTitle | compromiso | facturacion | segmento (P3Y->3 años, Triennial->cada 3 años)
+		self.assertEqual(item.item_name, "Office 365 E3 Sku | 3 años | cada 3 años | Commercial")
 		self.assertLessEqual(len(item.item_name), 140)
-		# La etiqueta completa (6 atributos, sin truncar) vive en ms_offer_label.
-		self.assertEqual(item.ms_offer_label, full)
+		# ms_offer_label conserva la representacion COMPLETA de 6 atributos, sin truncar.
+		self.assertEqual(
+			item.ms_offer_label,
+			"Office 365 E3 | CFQ7TTC0LH2Z | Office 365 E3 Sku | P3Y | Triennial | Commercial",
+		)
 
 	def test_fail_closed_when_uom_missing(self):
 		# acti_customs NO crea la UOM fiscal: si falta, fail-closed claro.

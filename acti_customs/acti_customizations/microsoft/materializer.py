@@ -14,7 +14,7 @@ No hay endpoint publico, boton ni UI.
 
 import frappe
 
-from acti_customs.acti_customizations.microsoft.keys import build_item_name, build_item_name_capped
+from acti_customs.acti_customizations.microsoft.keys import build_display_name_capped, build_item_name
 
 # Baseline aprobada para NUEVOS Items del catalogo Microsoft.
 ITEM_GROUP = "Licenciamiento Microsoft"
@@ -92,8 +92,12 @@ def _assert_structured_consistent(item_name, offer, expected_code):
 def _build_item(offer, item_code):
 	item = frappe.new_doc("Item")
 	item.item_code = item_code
-	# item_name estandar (<=140): representacion legible/determinista, NO la fuente de identidad.
-	item.item_name = build_item_name_capped(*_offer_args(offer))
+	# item_name estandar (<=140): SkuTitle | compromiso | facturacion | segmento
+	# (abrevia solo el SkuTitle). NO es la fuente de identidad; la completa vive en
+	# ms_offer_label + ms_*.
+	item.item_name = build_display_name_capped(
+		offer.sku_title, offer.term_duration, offer.billing_plan, offer.segment
+	)
 	item.item_group = ITEM_GROUP
 	item.stock_uom = STOCK_UOM
 	item.is_stock_item = 0

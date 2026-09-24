@@ -6,8 +6,8 @@ from frappe.model.document import Document
 from frappe.utils import getdate, today
 
 from acti_customs.acti_customizations.microsoft.keys import (
+	build_display_name_capped,
 	build_item_code,
-	build_item_name_capped,
 	build_offer_key,
 )
 
@@ -47,15 +47,8 @@ class MicrosoftOffer(Document):
 		)
 
 	def expected_item_name(self):
-		"""item_name (<=140) con los seis atributos; abrevia solo titulos si excede."""
-		return build_item_name_capped(
-			self.product_title,
-			self.product_id,
-			self.sku_title,
-			self.term_duration,
-			self.billing_plan,
-			self.segment,
-		)
+		"""item_name (<=140): SkuTitle | compromiso | facturacion | segmento (abrevia solo SkuTitle)."""
+		return build_display_name_capped(self.sku_title, self.term_duration, self.billing_plan, self.segment)
 
 	def is_vigente(self, on_date=None):
 		"""True si la oferta es comercialmente vigente en `on_date` (default hoy).
