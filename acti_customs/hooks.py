@@ -10,6 +10,40 @@ app_license = "mit"
 
 required_apps = ["erpnext"]
 
+# Fixtures
+# ------------------
+# Custom Fields de acti_customs (catalogo Microsoft) sobre Item. Se exportan/importan
+# filtrados por fieldname para no arrastrar custom fields de otras apps.
+# NOTA: acti_customs NO modifica campos/schema estandar (sin Property Setter sobre Item).
+fixtures = [
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			["dt", "=", "Item"],
+			[
+				"fieldname",
+				"in",
+				[
+					"ms_microsoft_section",
+					"ms_offer",
+					"ms_offer_key",
+					"ms_product_id",
+					"ms_sku_id",
+					"ms_term_duration",
+					"ms_billing_plan",
+					"ms_segment",
+					"ms_col_break",
+					"ms_product_title",
+					"ms_sku_title",
+					"ms_market",
+					"ms_currency",
+					"ms_offer_label",
+				],
+			],
+		],
+	},
+]
+
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
 # 	{
@@ -261,4 +295,3 @@ required_apps = ["erpnext"]
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

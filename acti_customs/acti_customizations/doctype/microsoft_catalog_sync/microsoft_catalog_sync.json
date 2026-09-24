@@ -1,0 +1,74 @@
+{
+ "actions": [],
+ "creation": "2025-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "intro",
+  "catalog_file",
+  "results_section",
+  "last_run_dry_run",
+  "last_run_at",
+  "last_result"
+ ],
+ "fields": [
+  {
+   "fieldname": "intro",
+   "fieldtype": "HTML",
+   "options": "<p>Adjunte el Excel del catalogo Microsoft (hoja <b>Jan_NCE_LicenseBasedPL_GA_MX</b>) y use <b>Dry Run</b> para analizar sin escribir, o <b>Aplicar catalogo</b> para sincronizar Microsoft Offer e Items. acti_customs no administra catalogos SAT/UOM: si falta una dependencia fiscal, la carga se detiene.</p>"
+  },
+  {
+   "fieldname": "catalog_file",
+   "fieldtype": "Attach",
+   "label": "Catalogo Microsoft (.xlsx)"
+  },
+  {
+   "fieldname": "results_section",
+   "fieldtype": "Section Break",
+   "label": "Ultima ejecucion"
+  },
+  {
+   "default": "0",
+   "fieldname": "last_run_dry_run",
+   "fieldtype": "Check",
+   "label": "Ultima ejecucion fue Dry Run",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_run_at",
+   "fieldtype": "Datetime",
+   "label": "Ultima ejecucion",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_result",
+   "fieldtype": "Code",
+   "label": "Ultimo resumen (JSON)",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "ACTI Customizations",
+ "name": "Microsoft Catalog Sync",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

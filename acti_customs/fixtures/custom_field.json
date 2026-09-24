@@ -1,0 +1,160 @@
+[
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_microsoft_section",
+  "dt": "Item",
+  "fieldname": "ms_microsoft_section",
+  "label": "Licenciamiento Microsoft (Catalogo)",
+  "fieldtype": "Section Break",
+  "insert_after": "description",
+  "collapsible": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_offer",
+  "dt": "Item",
+  "fieldname": "ms_offer",
+  "label": "Microsoft Offer",
+  "fieldtype": "Link",
+  "options": "Microsoft Offer",
+  "insert_after": "ms_microsoft_section",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_offer_key",
+  "dt": "Item",
+  "fieldname": "ms_offer_key",
+  "label": "Offer Key",
+  "fieldtype": "Data",
+  "insert_after": "ms_offer",
+  "read_only": 1,
+  "search_index": 1,
+  "description": "Clave tecnica de la oferta Microsoft (ProductId|SkuId|TermDuration|BillingPlan|Segment).",
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_product_id",
+  "dt": "Item",
+  "fieldname": "ms_product_id",
+  "label": "MS Product Id",
+  "fieldtype": "Data",
+  "insert_after": "ms_offer_key",
+  "read_only": 1,
+  "in_standard_filter": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_sku_id",
+  "dt": "Item",
+  "fieldname": "ms_sku_id",
+  "label": "MS Sku Id",
+  "fieldtype": "Data",
+  "insert_after": "ms_product_id",
+  "read_only": 1,
+  "in_standard_filter": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_term_duration",
+  "dt": "Item",
+  "fieldname": "ms_term_duration",
+  "label": "MS Term Duration",
+  "fieldtype": "Data",
+  "insert_after": "ms_sku_id",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_billing_plan",
+  "dt": "Item",
+  "fieldname": "ms_billing_plan",
+  "label": "MS Billing Plan",
+  "fieldtype": "Data",
+  "insert_after": "ms_term_duration",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_segment",
+  "dt": "Item",
+  "fieldname": "ms_segment",
+  "label": "MS Segment",
+  "fieldtype": "Data",
+  "insert_after": "ms_billing_plan",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_col_break",
+  "dt": "Item",
+  "fieldname": "ms_col_break",
+  "fieldtype": "Column Break",
+  "insert_after": "ms_segment",
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_product_title",
+  "dt": "Item",
+  "fieldname": "ms_product_title",
+  "label": "MS Product Title",
+  "fieldtype": "Data",
+  "insert_after": "ms_col_break",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_sku_title",
+  "dt": "Item",
+  "fieldname": "ms_sku_title",
+  "label": "MS Sku Title",
+  "fieldtype": "Data",
+  "insert_after": "ms_product_title",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_market",
+  "dt": "Item",
+  "fieldname": "ms_market",
+  "label": "MS Market",
+  "fieldtype": "Data",
+  "insert_after": "ms_sku_title",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_currency",
+  "dt": "Item",
+  "fieldname": "ms_currency",
+  "label": "MS Currency",
+  "fieldtype": "Data",
+  "insert_after": "ms_market",
+  "read_only": 1,
+  "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_offer_label",
+  "dt": "Item",
+  "fieldname": "ms_offer_label",
+  "label": "MS Offer Label",
+  "fieldtype": "Small Text",
+  "insert_after": "ms_currency",
+  "read_only": 1,
+  "description": "Etiqueta comercial completa (sin truncar): ProductTitle | ProductId | SkuTitle | TermDuration | BillingPlan | Segment. Fuente para mostrar en el selector/cotizador. item_name estandar (<=140) es solo una representacion legible.",
+  "module": "ACTI Customizations"
+ }
+]
