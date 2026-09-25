@@ -12,6 +12,8 @@
 // autoseleccionan las unicas hasta resolver UNA oferta -> recien entonces se muestran cantidad/margen,
 // el resumen y las dos acciones finales. Antes de resolver, esos elementos permanecen ocultos.
 
+/* global acti_customs */
+
 frappe.provide("acti_customs.ms");
 
 acti_customs.ms.open_dialog = function (frm) {
