@@ -146,7 +146,7 @@ class TestQuoter(FrappeTestCase):
 			frappe.delete_doc("Item", name, force=True, ignore_permissions=True)
 		for name in frappe.get_all("Microsoft Offer", pluck="name"):
 			frappe.delete_doc("Microsoft Offer", name, force=True, ignore_permissions=True)
-		frappe.db.commit()
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- limpieza de test (add_license commitea)
 
 	# --- resolucion progresiva ---
 	def test_first_step_prompts_product(self):
