@@ -10,6 +10,10 @@ app_license = "mit"
 
 required_apps = ["erpnext"]
 
+# Client scripts (aditivos; NO modifican core/erpnext_proposals)
+# ------------------
+doctype_js = {"Quotation": "public/js/quotation_microsoft.js"}
+
 # Fixtures
 # ------------------
 # Custom Fields de acti_customs (catalogo Microsoft) sobre Item. Se exportan/importan
