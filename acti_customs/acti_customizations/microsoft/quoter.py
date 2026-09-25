@@ -305,14 +305,14 @@ def _offer_dict(off):
 
 
 @frappe.whitelist()
-def get_next_options(selected=None):
+def get_next_options(selected: str | None = None):
 	if isinstance(selected, str):
 		selected = frappe.parse_json(selected) if selected else {}
 	return next_step(selected or {})
 
 
 @frappe.whitelist()
-def get_selection_path(selected=None):
+def get_selection_path(selected: str | None = None):
 	"""Resolucion editable para el dialogo (ver resolve_path)."""
 	if isinstance(selected, str):
 		selected = frappe.parse_json(selected) if selected else {}
@@ -320,13 +320,13 @@ def get_selection_path(selected=None):
 
 
 @frappe.whitelist()
-def get_price_preview(offer_key, qty, margin_pct):
+def get_price_preview(offer_key: str, qty: float, margin_pct: float):
 	off = _load_valid_offer(offer_key)
 	return price_summary(_offer_dict(off), qty, margin_pct)
 
 
 @frappe.whitelist()
-def add_license_to_quotation(quotation, offer_key, qty, margin_pct):
+def add_license_to_quotation(quotation: str, offer_key: str, qty: float, margin_pct: float):
 	"""Destino VENTA: agrega el Item Microsoft como linea Quotation Item con rate calculado."""
 	q = frappe.get_doc("Quotation", quotation)
 	q.check_permission("write")
@@ -352,7 +352,7 @@ def build_required_row(off, qty):
 
 
 @frappe.whitelist()
-def add_license_as_cost(quotation, offer_key, qty):
+def add_license_as_cost(quotation: str, offer_key: str, qty: float):
 	"""Destino COSTO: agrega el Item Microsoft a required_items de la propuesta (item/qty/uom).
 
 	NO crea Quotation Item, NO escribe costo/precio/margen. El costo y su efecto economico los resuelve
