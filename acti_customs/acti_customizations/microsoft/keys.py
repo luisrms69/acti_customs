@@ -165,6 +165,11 @@ def _is_trial(tags):
 	return "trial" in _norm(tags).lower()
 
 
+def is_trial_offer(term_duration, billing_plan, tags):
+	"""True para el caso especial trial: P1M + BillingPlan 'None' + tag Trial."""
+	return _norm(term_duration) == "P1M" and _norm(billing_plan) == "None" and _is_trial(tags)
+
+
 def _tail_parts(term_duration, billing_plan, segment, tags):
 	"""Componentes despues del SkuTitle. Caso especial P1M + None + Trial: etiqueta
 	combinada 'Prueba 1 mes' (sin componente de facturacion 'None')."""

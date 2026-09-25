@@ -53,3 +53,7 @@ jspm_packages/
 
 # Aider AI Chat
 .aider*
+
+# Scripts temporales (no se commitean)
+acti_customs/one_offs/
+one_offs/
