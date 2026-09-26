@@ -24,8 +24,17 @@ REQUIRED_COLUMNS = (
 	"Currency",
 	"UnitPrice",
 )
-# Columnas opcionales que se leen si estan presentes.
-OPTIONAL_COLUMNS = ("EffectiveStartDate", "EffectiveEndDate", "Tags", "ChangeIndicator")
+# Columnas opcionales que se leen si estan presentes. SkuDescription -> Item.description;
+# UnitOfMeasure -> informativo (hoy vacio; el Item usa la UOM fiscal E48). ERP Price, PreviousValues,
+# LastUpdatedDate NO se leen: son resultados/metadata del sistema viejo (ver ADR-0003).
+OPTIONAL_COLUMNS = (
+	"SkuDescription",
+	"UnitOfMeasure",
+	"EffectiveStartDate",
+	"EffectiveEndDate",
+	"Tags",
+	"ChangeIndicator",
+)
 
 
 class CatalogError(Exception):
@@ -94,6 +103,8 @@ def read_catalog(path):
 				"product_id": _cell(get(row, "ProductId")),
 				"sku_id": _cell(get(row, "SkuId")),
 				"sku_title": _cell(get(row, "SkuTitle")),
+				"sku_description": _cell(get(row, "SkuDescription")) or None,
+				"unit_of_measure": _cell(get(row, "UnitOfMeasure")) or None,
 				"term_duration": _cell(get(row, "TermDuration")),
 				"billing_plan": _cell(get(row, "BillingPlan")),
 				"segment": _cell(get(row, "Segment")),

@@ -151,6 +151,19 @@ FRIENDLY_BILLING = {"Monthly": "mensual", "Annual": "anual", "Triennial": "cada 
 DISPLAY_SEP = " | "
 
 
+def microsoft_cost(unit_price, term_duration, billing_plan):
+	"""Costo operativo Microsoft (regla del Excel), aplicado SOLO durante el sync.
+
+	IF(TermDuration=P1Y AND BillingPlan=Monthly) -> UnitPrice/12 ; en otro caso -> UnitPrice.
+	Trial (UnitPrice 0) -> 0. Funcion pura; el resultado se persiste en Item Price y el runtime
+	del cotizador NUNCA lo recalcula.
+	"""
+	up = float(unit_price or 0)
+	if _norm(term_duration) == "P1Y" and _norm(billing_plan) == "Monthly":
+		return up / 12.0
+	return up
+
+
 def friendly_term(value):
 	v = _norm(value)
 	return FRIENDLY_TERM.get(v, v)
@@ -165,15 +178,18 @@ def _is_trial(tags):
 	return "trial" in _norm(tags).lower()
 
 
-def is_trial_offer(term_duration, billing_plan, tags):
-	"""True para el caso especial trial: P1M + BillingPlan 'None' + tag Trial."""
-	return _norm(term_duration) == "P1M" and _norm(billing_plan) == "None" and _is_trial(tags)
+def is_trial_offer(term_duration, billing_plan, tags=None):
+	"""True para el caso especial trial. En el catálogo NCE `BillingPlan='None'` (con `P1M`) ocurre
+	exclusivamente en ofertas Trial (verificado 1:1), por lo que la identidad P1M+None basta para
+	detectarlo sin depender de un campo de tags persistido. Si se pasan tags se aceptan como refuerzo,
+	pero no son requeridos."""
+	return _norm(term_duration) == "P1M" and _norm(billing_plan) == "None"
 
 
-def _tail_parts(term_duration, billing_plan, segment, tags):
-	"""Componentes despues del SkuTitle. Caso especial P1M + None + Trial: etiqueta
+def _tail_parts(term_duration, billing_plan, segment, tags=None):
+	"""Componentes despues del SkuTitle. Caso especial P1M + None (Trial): etiqueta
 	combinada 'Prueba 1 mes' (sin componente de facturacion 'None')."""
-	if _norm(term_duration) == "P1M" and _norm(billing_plan) == "None" and _is_trial(tags):
+	if is_trial_offer(term_duration, billing_plan, tags):
 		return ["Prueba 1 mes", _norm(segment)]
 	return [friendly_term(term_duration), friendly_billing(billing_plan), _norm(segment)]
 
