@@ -1,335 +1,164 @@
 # Copyright (c) 2025, Consultoria en Negocios y Aplicaciones and contributors
 # For license information, please see license.txt
 
-"""Sincronizacion del catalogo Microsoft: Excel -> Microsoft Offer -> Items.
+"""Sincronización del catálogo Microsoft: Excel → Item + Item Price + Item Default (ADR-0003).
 
-Flujo idempotente:
-  - lee/valida el Excel (fail-closed si esta mal formado);
-  - UPSERT de Microsoft Offer por offer_key (crea nuevas, actualiza metadata mutable);
-  - marca is_active=0 las ofertas que ya no vienen en el archivo (sin borrarlas);
-  - materializa el Item faltante de cada oferta valida (materialize_item, idempotente);
-  - nunca duplica Items; preserva intactos los 15 Items legacy.
+Flujo idempotente, nativo, sin `Microsoft Offer`:
+  - lee/valida el Excel (fail-closed si está mal formado);
+  - por cada oferta: UPSERT del Item (identidad = item_code determinista) con metadata Microsoft mínima;
+  - persiste el COSTO (regla /12) como Buying Item Price USD en `Microsoft NCE - Compra`, con vigencias;
+  - fija `Item Default.default_price_list` del Item para la Company;
+  - ofertas ausentes: deshabilita el Item y cierra su Item Price vigente (sin borrar histórico);
+  - reaparición: reactiva y reabre precio en el siguiente sync.
 
-acti_customs CONSUME catalogos fiscales (UOM/SAT/Item Group); no los crea ni administra.
-Preflight fail-closed antes de aplicar si falta una dependencia.
+acti_customs CONSUME catálogos fiscales (UOM/Item Group); no los crea. El `UnitPrice` crudo es input:
+NO se persiste como segunda verdad; solo el costo calculado vive en Item Price.
 """
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint
 
 from acti_customs.acti_customizations.microsoft.catalog import SHEET, CatalogError, read_catalog
-from acti_customs.acti_customizations.microsoft.keys import (
-	OfferKeyError,
-	build_display_name,
-	build_display_name_capped,
-	build_offer_key,
-)
+from acti_customs.acti_customizations.microsoft.keys import OfferKeyError, microsoft_cost
 from acti_customs.acti_customizations.microsoft.materializer import (
 	ITEM_GROUP,
 	STOCK_UOM,
-	MaterializeError,
-	materialize_item,
+	item_code_for,
+	upsert_item,
+)
+from acti_customs.acti_customizations.microsoft.pricing import (
+	PRICE_LIST,
+	close_open_item_prices,
+	ensure_price_list,
+	set_item_default_price_list,
+	upsert_buying_item_price,
 )
 
 VALID_SEGMENTS = ("Commercial", "Education", "Charity")
 
-# Campos de catalogo mutables (metadata NO identitaria) que se actualizan sin recrear Item.
-_MUTABLE_STR = ("product_title", "sku_title", "currency", "market", "tags", "change_indicator")
 
-
-def _norm(v):
-	return "" if v is None else str(v).strip()
-
-
-def _norm_date(v):
-	return str(v)[:10] if v else None
-
-
-def _differs(existing, row):
-	"""True si la metadata mutable del archivo difiere de la oferta existente."""
-	for f in _MUTABLE_STR:
-		if _norm(existing.get(f)) != _norm(row.get(f)):
-			return True
-	if round(flt(existing.get("unit_price")), 2) != round(flt(row.get("unit_price")), 2):
-		return True
-	if _norm_date(existing.get("effective_start_date")) != (row.get("effective_start_date") or None):
-		return True
-	if _norm_date(existing.get("effective_end_date")) != (row.get("effective_end_date") or None):
-		return True
-	return False
+def _target_company():
+	"""Company objetivo para el Item Default (default global o única Company). Fail-closed si no hay."""
+	company = frappe.defaults.get_global_default("company") or frappe.db.get_value("Company", {}, "name")
+	if not company:
+		raise CatalogError("No hay Company en el site para fijar Item Default (fail-closed).")
+	return company
 
 
 def _assert_preflight():
-	"""Dependencias fiscales/maestras que acti_customs consume (no crea)."""
-	missing = []
 	if not frappe.db.exists("UOM", STOCK_UOM):
-		missing.append(f"UOM {STOCK_UOM!r} (la administra facturacion_mexico)")
+		raise CatalogError(f"Falta la UOM {STOCK_UOM!r} (la administra facturacion_mexico).")
 	if not frappe.db.exists("Item Group", ITEM_GROUP):
-		missing.append(f"Item Group {ITEM_GROUP!r}")
-	if missing:
-		raise CatalogError("Faltan dependencias requeridas en el site: " + "; ".join(missing))
+		raise CatalogError(f"Falta el Item Group {ITEM_GROUP!r}.")
+	ensure_price_list()  # crea o valida (fail-closed si incompatible)
+	_target_company()
 
 
 def _plan(rows):
-	"""Calcula el plan de sincronizacion en memoria (solo lectura)."""
-	existing = {
-		o.name: o
-		for o in frappe.get_all(
-			"Microsoft Offer",
-			fields=[
-				"name",
-				"product_title",
-				"sku_title",
-				"unit_price",
-				"currency",
-				"market",
-				"effective_start_date",
-				"effective_end_date",
-				"tags",
-				"change_indicator",
-				"is_active",
-				"item",
-			],
-		)
-	}
-	item_keys = set(frappe.get_all("Item", filters={"ms_offer_key": ["is", "set"]}, pluck="ms_offer_key"))
-
-	errors, valid, new, update, unchanged = [], [], [], [], []
-	file_keys = set()
+	"""Plan de sincronización (solo lectura)."""
+	existing = set(frappe.get_all("Item", filters={"item_group": ITEM_GROUP}, pluck="name"))
+	errors, valid, file_codes = [], [], set()
 	for r in rows:
+		if r["segment"] not in VALID_SEGMENTS:
+			errors.append({"row": r["_row"], "error": f"Segment invalido: {r['segment']!r}"})
+			continue
 		try:
-			key = build_offer_key(
-				r["product_id"], r["sku_id"], r["term_duration"], r["billing_plan"], r["segment"]
-			)
+			code = item_code_for(r)
 		except OfferKeyError as exc:
 			errors.append({"row": r["_row"], "error": str(exc)})
 			continue
-		if r["segment"] not in VALID_SEGMENTS:
-			errors.append(
-				{"row": r["_row"], "offer_key": key, "error": f"Segment invalido: {r['segment']!r}"}
-			)
+		if code in file_codes:
+			errors.append({"row": r["_row"], "item_code": code, "error": "item_code duplicado en el archivo"})
 			continue
-		if key in file_keys:
-			errors.append({"row": r["_row"], "offer_key": key, "error": "offer_key duplicado en el archivo"})
-			continue
-		file_keys.add(key)
-		valid.append((key, r))
-		ex = existing.get(key)
-		if ex is None:
-			new.append(key)
-		elif _differs(ex, r):
-			update.append(key)
-		else:
-			unchanged.append(key)
+		file_codes.add(code)
+		valid.append((code, r))
 
-	to_inactivate = [k for k, o in existing.items() if o.is_active and k not in file_keys]
-	items_to_create = [k for k, _ in valid if k not in item_keys]
-	items_existing = [k for k, _ in valid if k in item_keys]
+	to_disable = sorted(existing - file_codes)
+	items_new = [c for c, _r in valid if c not in existing]
+	items_existing = [c for c, _r in valid if c in existing]
 	return {
-		"existing": existing,
 		"valid": valid,
 		"errors": errors,
-		"new": new,
-		"update": set(update),
-		"unchanged": unchanged,
-		"to_inactivate": to_inactivate,
-		"items_to_create": items_to_create,
+		"items_new": items_new,
 		"items_existing": items_existing,
+		"to_disable": to_disable,
 	}
 
 
-def _new_offer_doc(row):
-	doc = frappe.new_doc("Microsoft Offer")
-	for f in (
-		"product_title",
-		"product_id",
-		"sku_title",
-		"sku_id",
-		"term_duration",
-		"billing_plan",
-		"segment",
-		"market",
-		"currency",
-		"unit_price",
-		"effective_start_date",
-		"effective_end_date",
-		"tags",
-		"change_indicator",
-	):
-		doc.set(f, row.get(f))
-	doc.is_active = 1
-	return doc
-
-
-def _apply_mutable(doc, row):
-	for f in (
-		"product_title",
-		"sku_title",
-		"currency",
-		"market",
-		"unit_price",
-		"effective_start_date",
-		"effective_end_date",
-		"tags",
-		"change_indicator",
-	):
-		doc.set(f, row.get(f))
-	doc.is_active = 1
-
-
-def _apply(plan):
-	created = updated = items_created = inactivated = 0
-	mat_errors = []
+def _apply(plan, company):
+	created = updated = prices = defaults = disabled = 0
+	errors = []
+	existing_new = set(plan["items_new"])
 	n = 0
-	for key, row in plan["valid"]:
-		ex = plan["existing"].get(key)
-		if ex is None:
-			_new_offer_doc(row).insert(ignore_permissions=True)
-			created += 1
-		elif key in plan["update"]:
-			doc = frappe.get_doc("Microsoft Offer", key)
-			_apply_mutable(doc, row)
-			doc.save(ignore_permissions=True)
-			updated += 1
-		elif not ex.is_active:
-			# Reaparecio en el catalogo: reactivar.
-			frappe.db.set_value("Microsoft Offer", key, "is_active", 1)
-		was_missing_item = key in set(plan["items_to_create"])
+	for code, r in plan["valid"]:
 		try:
-			materialize_item(key)
-			if was_missing_item:
-				items_created += 1
-		except MaterializeError as exc:
-			mat_errors.append({"offer_key": key, "error": str(exc)})
+			was_new = code in existing_new
+			upsert_item(r)
+			created += 1 if was_new else 0
+			updated += 0 if was_new else 1
+			cost = microsoft_cost(r.get("unit_price"), r["term_duration"], r["billing_plan"])
+			upsert_buying_item_price(
+				code, cost, STOCK_UOM, r.get("effective_start_date"), r.get("effective_end_date")
+			)
+			prices += 1
+			set_item_default_price_list(code, company)
+			defaults += 1
+		except Exception as exc:
+			errors.append({"item_code": code, "error": str(exc)})
 		n += 1
 		if n % 200 == 0:
 			frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
 
-	for key in plan["to_inactivate"]:
-		frappe.db.set_value("Microsoft Offer", key, "is_active", 0)
-		inactivated += 1
+	for code in plan["to_disable"]:
+		frappe.db.set_value("Item", code, "disabled", 1)
+		close_open_item_prices(code)
+		disabled += 1
+
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- commit final controlado del apply
 	return {
-		"offers_created": created,
-		"offers_updated": updated,
-		"items_created": items_created,
-		"offers_inactivated": inactivated,
-		"materialize_errors": mat_errors,
+		"items_created": created,
+		"items_updated": updated,
+		"prices_upserted": prices,
+		"item_defaults_set": defaults,
+		"items_disabled": disabled,
+		"row_errors": errors,
 	}
 
 
 def sync_microsoft_catalog(file_path, dry_run=True):
-	"""Sincroniza el catalogo Microsoft desde un .xlsx.
+	"""Sincroniza el catálogo Microsoft desde un .xlsx.
 
 	dry_run=True: analiza y devuelve el resumen SIN modificar datos.
-	dry_run=False: aplica (crea/actualiza catalogo, materializa Items, inactiva ausentes).
-
-	Fail-closed ante archivo mal formado (CatalogError) o dependencias faltantes en apply.
+	dry_run=False: aplica (Items + Item Price + Item Default; deshabilita ausentes).
 	"""
 	dry_run = bool(cint(dry_run)) if not isinstance(dry_run, bool) else dry_run
 	rows, _header = read_catalog(file_path)  # CatalogError si estructura invalida
 	preflight_ok = frappe.db.exists("UOM", STOCK_UOM) and frappe.db.exists("Item Group", ITEM_GROUP)
 	if not dry_run:
-		_assert_preflight()  # fail-closed antes de escribir
+		_assert_preflight()
 
 	plan = _plan(rows)
 	report = {
 		"dry_run": dry_run,
 		"sheet": SHEET,
+		"price_list": PRICE_LIST,
 		"preflight_ok": bool(preflight_ok),
 		"rows_read": len(rows),
 		"rows_valid": len(plan["valid"]),
-		"offers_new": len(plan["new"]),
-		"offers_to_update": len(plan["update"]),
-		"offers_unchanged": len(plan["unchanged"]),
-		"offers_to_inactivate": len(plan["to_inactivate"]),
-		"items_to_create": len(plan["items_to_create"]),
+		"items_new": len(plan["items_new"]),
 		"items_existing": len(plan["items_existing"]),
+		"items_to_disable": len(plan["to_disable"]),
 		"errors": plan["errors"],
 	}
 	if not dry_run:
-		report["applied"] = _apply(plan)
+		report["applied"] = _apply(plan, _target_company())
 	return report
-
-
-def refresh_microsoft_item_names(dry_run=True):
-	"""Re-aplica item_name (nuevo naming) a los Items Microsoft ya creados.
-
-	Solo actualiza `item_name` de Items con ms_offer_key (excluye legacy). NO toca
-	item_code, ms_*, offer_key, links ni metadata estandar. Devuelve estadisticas de
-	longitud del nombre completo (sin capar) y conteos de actualizacion.
-	"""
-	dry_run = bool(cint(dry_run)) if not isinstance(dry_run, bool) else dry_run
-	# Tags viven en Microsoft Offer (no en el Item); mapa offer_key -> tags para la regla Trial.
-	offer_tags = dict(frappe.get_all("Microsoft Offer", fields=["name", "tags"], as_list=True))
-	items = frappe.get_all(
-		"Item",
-		filters={"ms_offer_key": ["is", "set"]},
-		fields=[
-			"name",
-			"item_name",
-			"ms_offer_key",
-			"ms_sku_title",
-			"ms_term_duration",
-			"ms_billing_plan",
-			"ms_segment",
-		],
-	)
-	lengths = []
-	over_140 = 0
-	updated = unchanged = 0
-	n = 0
-	for it in items:
-		tags = offer_tags.get(it.ms_offer_key)
-		full = build_display_name(
-			it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment, tags
-		)
-		lengths.append(len(full))
-		if len(full) > 140:
-			over_140 += 1
-		capped = build_display_name_capped(
-			it.ms_sku_title, it.ms_term_duration, it.ms_billing_plan, it.ms_segment, tags
-		)
-		if capped != (it.item_name or ""):
-			if not dry_run:
-				frappe.db.set_value("Item", it.name, "item_name", capped, update_modified=False)
-			updated += 1
-		else:
-			unchanged += 1
-		n += 1
-		if not dry_run and n % 500 == 0:
-			frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
-	if not dry_run:
-		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
-	lengths.sort()
-	stats = {}
-	if lengths:
-		stats = {
-			"min": lengths[0],
-			"avg": round(sum(lengths) / len(lengths), 1),
-			"p95": lengths[min(len(lengths) - 1, int(len(lengths) * 0.95))],
-			"max": lengths[-1],
-			"full_over_140": over_140,
-		}
-	return {
-		"dry_run": dry_run,
-		"items_microsoft": len(items),
-		"item_name_updated": updated,
-		"item_name_unchanged": unchanged,
-		"full_name_length": stats,
-	}
-
-
-# --- Mecanismo de carga nativo (UI): wrapper whitelisted para el DocType Single ---
 
 
 @frappe.whitelist()
 def run_sync_from_single(dry_run: int = 1):
-	"""Ejecuta la sincronizacion usando el archivo adjunto en 'Microsoft Catalog Sync'.
-
-	Llamado por los botones Dry Run / Aplicar del DocType Single. Solo System Manager.
-	"""
+	"""Ejecuta la sincronización usando el archivo adjunto en 'Microsoft Catalog Sync'. Solo System Manager."""
 	frappe.only_for("System Manager")
 	dry_run = bool(cint(dry_run))
 	file_url = frappe.db.get_single_value("Microsoft Catalog Sync", "catalog_file")
