@@ -72,8 +72,19 @@ def _assert_preflight():
 
 
 def _plan(rows):
-	"""Plan de sincronización (solo lectura)."""
-	existing = set(frappe.get_all("Item", filters={"item_group": ITEM_GROUP}, pluck="name"))
+	"""Plan de sincronización (solo lectura).
+
+	"Gestionados por el sync" = Items del catálogo NCE, marcados por `ms_product_id` set. Los Items
+	legacy/manuales que compartan el Item Group pero NO tengan `ms_product_id` quedan FUERA (no se
+	cuentan ni se desactivan): el sync solo administra las ofertas Microsoft NCE.
+	"""
+	existing = set(
+		frappe.get_all(
+			"Item",
+			filters={"item_group": ITEM_GROUP, "ms_product_id": ["is", "set"]},
+			pluck="name",
+		)
+	)
 	errors, valid, file_codes = [], [], set()
 	for r in rows:
 		if r["segment"] not in VALID_SEGMENTS:

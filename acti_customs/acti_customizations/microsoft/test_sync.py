@@ -216,3 +216,21 @@ class TestSync(FrappeTestCase):
 		)
 		# NO se tocaron defaults de otra Company
 		self.assertFalse(any(d.company == other for d in it.item_defaults))
+
+	def test_item_legacy_no_gestionado_no_se_desactiva(self):
+		# Item legacy en el mismo Item Group pero SIN ms_product_id (no NCE) no debe ser tocado por el sync.
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "LEGACY-NO-NCE-001",
+				"item_name": "Legacy no NCE",
+				"item_group": ITEM_GROUP,
+				"stock_uom": STOCK_UOM,
+				"is_stock_item": 0,
+			}
+		).insert(ignore_permissions=True)
+		rep = self._apply([ROW_A])  # el legacy NO está en el Excel
+		self.assertEqual(rep["items_to_disable"], 0)  # el legacy no cuenta como "desaparecido"
+		self.assertEqual(frappe.db.get_value("Item", "LEGACY-NO-NCE-001", "disabled"), 0)  # intacto
