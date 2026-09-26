@@ -110,6 +110,7 @@ acti_customs.ms.open_dialog = function (frm) {
 					offer_key: resolved.offer_key,
 					qty: d.get_value("qty"),
 					margin_pct: d.get_value("margin_pct"),
+					quotation: frm.doc.name,
 				},
 			})
 			.then((r) => {

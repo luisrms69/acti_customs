@@ -21,7 +21,9 @@ STOCK_UOM = "E48 - Servicio"  # UOM real existente en el site (SAT E48). No crea
 SAT_PRODUCTO_SERVICIO = "81112501"
 SAT_FIELD = "fm_producto_servicio_sat"  # custom field de facturacion_mexico (opcional)
 
-# Campos Microsoft MÍNIMOS en Item (dimensiones sin equivalente nativo, para el selector).
+# Campos Microsoft MÍNIMOS en Item (dimensiones del selector sin equivalente nativo). Se conserva
+# ms_sku_title porque el paso "SKU" del selector necesita el título como dimensión discreta (item_name
+# es un display compuesto SkuTitle|compromiso|facturación|segmento, no una agrupación por SKU).
 _MS_FIELD_MAP = {
 	"ms_product_id": "product_id",
 	"ms_sku_id": "sku_id",
@@ -29,6 +31,7 @@ _MS_FIELD_MAP = {
 	"ms_billing_plan": "billing_plan",
 	"ms_segment": "segment",
 	"ms_product_title": "product_title",
+	"ms_sku_title": "sku_title",
 }
 
 
