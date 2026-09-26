@@ -38,12 +38,29 @@ from acti_customs.acti_customizations.microsoft.pricing import (
 VALID_SEGMENTS = ("Commercial", "Education", "Charity")
 
 
-def _target_company():
-	"""Company objetivo para el Item Default (default global o única Company). Fail-closed si no hay."""
-	company = frappe.defaults.get_global_default("company") or frappe.db.get_value("Company", {}, "name")
-	if not company:
-		raise CatalogError("No hay Company en el site para fijar Item Default (fail-closed).")
-	return company
+def resolve_company(explicit, companies):
+	"""Company objetivo del Item Default (pura, determinista; sin selección silenciosa).
+
+	- explícita → debe existir en el site.
+	- sin explícita: 1 Company → esa; 0 → fail-closed; >1 → fail-closed (hay que especificarla).
+	El default global de Frappe puede servir como valor INICIAL del campo en Microsoft Catalog Sync,
+	pero NO como mecanismo para desambiguar múltiples Companies aquí.
+	"""
+	if explicit:
+		if explicit not in companies:
+			raise CatalogError(f"Company {explicit!r} no existe en el site (fail-closed).")
+		return explicit
+	if len(companies) == 1:
+		return companies[0]
+	if not companies:
+		raise CatalogError("No hay Company en el site (fail-closed).")
+	raise CatalogError(
+		"Hay multiples Companies: especifique la Company objetivo en 'Microsoft Catalog Sync' (fail-closed)."
+	)
+
+
+def _resolve_company(explicit=None):
+	return resolve_company(explicit, frappe.get_all("Company", pluck="name"))
 
 
 def _assert_preflight():
@@ -52,7 +69,6 @@ def _assert_preflight():
 	if not frappe.db.exists("Item Group", ITEM_GROUP):
 		raise CatalogError(f"Falta el Item Group {ITEM_GROUP!r}.")
 	ensure_price_list()  # crea o valida (fail-closed si incompatible)
-	_target_company()
 
 
 def _plan(rows):
@@ -126,17 +142,20 @@ def _apply(plan, company):
 	}
 
 
-def sync_microsoft_catalog(file_path, dry_run=True):
+def sync_microsoft_catalog(file_path, dry_run=True, company=None):
 	"""Sincroniza el catálogo Microsoft desde un .xlsx.
 
 	dry_run=True: analiza y devuelve el resumen SIN modificar datos.
 	dry_run=False: aplica (Items + Item Price + Item Default; deshabilita ausentes).
+	`company`: Company objetivo del Item Default (obligatoria si hay varias; ver resolve_company).
 	"""
 	dry_run = bool(cint(dry_run)) if not isinstance(dry_run, bool) else dry_run
 	rows, _header = read_catalog(file_path)  # CatalogError si estructura invalida
 	preflight_ok = frappe.db.exists("UOM", STOCK_UOM) and frappe.db.exists("Item Group", ITEM_GROUP)
+	target_company = None
 	if not dry_run:
 		_assert_preflight()
+		target_company = _resolve_company(company)  # fail-closed si ambigua/ausente
 
 	plan = _plan(rows)
 	report = {
@@ -144,6 +163,7 @@ def sync_microsoft_catalog(file_path, dry_run=True):
 		"sheet": SHEET,
 		"price_list": PRICE_LIST,
 		"preflight_ok": bool(preflight_ok),
+		"target_company": target_company,
 		"rows_read": len(rows),
 		"rows_valid": len(plan["valid"]),
 		"items_new": len(plan["items_new"]),
@@ -152,21 +172,24 @@ def sync_microsoft_catalog(file_path, dry_run=True):
 		"errors": plan["errors"],
 	}
 	if not dry_run:
-		report["applied"] = _apply(plan, _target_company())
+		report["applied"] = _apply(plan, target_company)
 	return report
 
 
 @frappe.whitelist()
 def run_sync_from_single(dry_run: int = 1):
-	"""Ejecuta la sincronización usando el archivo adjunto en 'Microsoft Catalog Sync'. Solo System Manager."""
+	"""Ejecuta la sincronización usando el archivo y la Company de 'Microsoft Catalog Sync'. Solo System Manager."""
 	frappe.only_for("System Manager")
 	dry_run = bool(cint(dry_run))
-	file_url = frappe.db.get_single_value("Microsoft Catalog Sync", "catalog_file")
+	single = frappe.get_single("Microsoft Catalog Sync")
+	file_url = single.catalog_file
 	if not file_url:
 		frappe.throw(_("Adjunte el archivo .xlsx del catalogo Microsoft primero."))
 	file_doc = frappe.get_doc("File", {"file_url": file_url})
-	report = sync_microsoft_catalog(file_doc.get_full_path(), dry_run=dry_run)
-	single = frappe.get_single("Microsoft Catalog Sync")
+	report = sync_microsoft_catalog(
+		file_doc.get_full_path(), dry_run=dry_run, company=single.get("target_company")
+	)
+	single.reload()
 	single.last_run_dry_run = 1 if dry_run else 0
 	single.last_run_at = frappe.utils.now()
 	single.last_result = frappe.as_json(report, indent=1)

@@ -1,18 +1,12 @@
 # Copyright (c) 2025, Consultoria en Negocios y Aplicaciones and contributors
 # For license information, please see license.txt
 
-"""Claves determinísticas del catálogo Microsoft.
+"""Claves determinísticas del catálogo Microsoft (ADR-0003).
 
-Dos identidades distintas para una oferta:
-
-- **offer_key** (clave técnica/idempotencia): `ProductId|SkuId|TermDuration|BillingPlan|Segment`.
-  NO usa títulos (pueden cambiar entre versiones del catálogo). En el catálogo actual estas
-  5 componentes dan 3,932 valores únicos para las 3,932 ofertas.
-- **item_code** (código legible del Item ERPNext):
-  `MS-<ProductId>-<SkuId>-<TermDuration>-<BillingPlan>-<Segment>`.
-
-Ambas se derivan de las MISMAS 5 componentes, de forma determinística. Funciones puras
-(sin frappe) para poder testearlas y reutilizarlas desde la futura rutina de sincronizacion.
+Identidad de una oferta = **item_code** (código y name del Item ERPNext):
+`MS-<ProductId>-<SkuId>-<TermDuration>-<BillingPlan>-<Segment>`, derivado de las 5 componentes
+de forma determinística y única (verificado: 3,932 ofertas → 3,932 item_code sin colisión).
+No hay `offer_key` persistido: la identidad ES el item_code. Funciones puras (sin frappe).
 """
 
 # Componentes que forman la identidad tecnica, en orden.
@@ -53,11 +47,6 @@ def validate_components(product_id, sku_id, term_duration, billing_plan, segment
 				f"Componente {name}={val!r} contiene un separador reservado ('{OFFER_KEY_SEP}' o '{ITEM_CODE_SEP}')"
 			)
 	return comps
-
-
-def build_offer_key(product_id, sku_id, term_duration, billing_plan, segment):
-	comps = validate_components(product_id, sku_id, term_duration, billing_plan, segment)
-	return OFFER_KEY_SEP.join(comps)
 
 
 def build_item_code(product_id, sku_id, term_duration, billing_plan, segment):
@@ -141,8 +130,7 @@ def build_item_name_capped(
 
 # ---------------------------------------------------------------------------
 # item_name definitivo (display): <SkuTitle> | <compromiso> | <facturacion> | <segmento>
-# NO usa ProductTitle/ProductId. La representacion completa de 6 atributos queda en
-# ms_offer_label (build_item_name). Los valores no mapeados se conservan crudos
+# NO usa ProductTitle/ProductId. Los valores no mapeados se conservan crudos
 # (deterministico), no se inventan.
 # ---------------------------------------------------------------------------
 
@@ -223,7 +211,7 @@ def build_display_name_capped(
 	"""item_name <= maxlen; abrevia SOLO el SkuTitle (truncado en medio).
 
 	Los componentes que siguen al SkuTitle quedan siempre completos. El SkuTitle completo
-	permanece en ms_sku_title y en ms_offer_label.
+	permanece en ms_sku_title.
 	"""
 	full = build_display_name(sku_title, term_duration, billing_plan, segment, tags)
 	if len(full) <= maxlen:

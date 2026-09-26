@@ -15,10 +15,10 @@ import frappe
 import openpyxl
 from frappe.tests.utils import FrappeTestCase
 
-from acti_customs.acti_customizations.microsoft.catalog import SHEET
+from acti_customs.acti_customizations.microsoft.catalog import SHEET, CatalogError
 from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM
 from acti_customs.acti_customizations.microsoft.pricing import PRICE_LIST
-from acti_customs.acti_customizations.microsoft.sync import sync_microsoft_catalog
+from acti_customs.acti_customizations.microsoft.sync import resolve_company, sync_microsoft_catalog
 from acti_customs.acti_customizations.microsoft.test_materializer import _prereqs
 
 COLUMNS = [
@@ -82,7 +82,8 @@ class TestSync(FrappeTestCase):
 		self._tmp = []
 		self._cleanup()
 		_prereqs()
-		self._has_company = bool(frappe.db.get_value("Company", {}, "name"))
+		self._company = frappe.db.get_value("Company", {}, "name")
+		self._has_company = bool(self._company)
 
 	def tearDown(self):
 		for p in self._tmp:
@@ -111,7 +112,7 @@ class TestSync(FrappeTestCase):
 		return path
 
 	def _apply(self, rows):
-		return sync_microsoft_catalog(self._xlsx(rows), dry_run=False)
+		return sync_microsoft_catalog(self._xlsx(rows), dry_run=False, company=self._company)
 
 	def _price(self, code):
 		rows = frappe.get_all(
@@ -183,3 +184,35 @@ class TestSync(FrappeTestCase):
 		self._apply([ROW_A])  # B desaparece -> disabled
 		self._apply([ROW_A, ROW_B])  # B reaparece
 		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 0)
+
+	# --- selección de Company (pura, determinista) ---
+	def test_resolve_company_una(self):
+		self.assertEqual(resolve_company(None, ["ACME"]), "ACME")
+
+	def test_resolve_company_multiples_con_explicita(self):
+		self.assertEqual(resolve_company("B", ["A", "B", "C"]), "B")
+
+	def test_resolve_company_multiples_sin_explicita_failclosed(self):
+		with self.assertRaises(CatalogError):
+			resolve_company(None, ["A", "B"])
+
+	def test_resolve_company_explicita_inexistente_failclosed(self):
+		with self.assertRaises(CatalogError):
+			resolve_company("X", ["A", "B"])
+
+	def test_resolve_company_cero_failclosed(self):
+		with self.assertRaises(CatalogError):
+			resolve_company(None, [])
+
+	def test_item_default_solo_company_objetivo(self):
+		companies = frappe.get_all("Company", pluck="name")
+		if len(companies) < 2:
+			self.skipTest("Se requieren >=2 Companies para verificar aislamiento del Item Default.")
+		self._apply([ROW_A])  # usa self._company como objetivo
+		other = next(c for c in companies if c != self._company)
+		it = frappe.get_doc("Item", CODE_A)
+		self.assertTrue(
+			any(d.company == self._company and d.default_price_list == PRICE_LIST for d in it.item_defaults)
+		)
+		# NO se tocaron defaults de otra Company
+		self.assertFalse(any(d.company == other for d in it.item_defaults))
