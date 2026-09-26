@@ -175,16 +175,22 @@ class TestQuoter(FrappeTestCase):
 			with self.assertRaises(QuoterError):
 				resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME")
 
-	def test_resolve_cost_trial_sin_costo_es_cero_valido(self):
-		# Trial (P1M+None): el resolver colapsa el Item Price 0 en 'sin_costo', pero es costo 0 legítimo.
-		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
+	def test_resolve_cost_buying_item_price_cero_valido(self):
+		# Item Price real con rate 0 (p. ej. Trial) → el resolver lo devuelve como buying_item_price 0.
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "buying_item_price")):
 			self.assertEqual(resolve_cost(self.trial, "2026-09-26", "USD", "ACME"), 0.0)
 
-	def test_resolve_cost_comprable_sin_costo_failclosed(self):
-		# Item comprable NO-Trial sin fuente de costo → error (no cotizar sobre 0).
+	def test_resolve_cost_sin_costo_failclosed(self):
+		# sin_costo = Item comprable SIN fuente de costo → error SIEMPRE (sin excepción Trial).
 		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
 			with self.assertRaises(QuoterError):
 				resolve_cost(self.a_annual_com, "2026-09-26", "USD", "ACME")
+
+	def test_resolve_cost_sin_costo_failclosed_incluso_trial(self):
+		# Aun un Item Trial: si el resolver dice sin_costo (no hay Item Price), fail-closed (no workaround).
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.trial, "2026-09-26", "USD", "ACME")
 
 	def test_resolve_cost_no_purchase_cero(self):
 		# no_purchase: el Item explícitamente no es comprable → 0 legítimo.
