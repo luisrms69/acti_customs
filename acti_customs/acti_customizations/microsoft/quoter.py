@@ -38,6 +38,9 @@ SELECT_ORDER = (
 VISIBLE_FIELDS = ("product_title", "sku_title", "term_duration", "billing_plan", "segment")
 REQUIRED_ITEMS_FIELD = "required_items"
 
+# Código de source del resolver de erpnext_proposals para "Item comprable sin fuente de costo".
+SRC_SIN_COSTO = "sin_costo"
+
 # Dimensión del selector -> campo real en Item.
 _ITEM_FIELD = {
 	"product_title": "ms_product_title",
@@ -267,6 +270,12 @@ def _summary_for(item_code):
 	return _item_summary(item)
 
 
+def _is_trial_item(item_code):
+	"""True si el Item es un Trial Microsoft (P1M + BillingPlan None) → costo 0 legítimo."""
+	v = frappe.db.get_value("Item", item_code, ["ms_term_duration", "ms_billing_plan"], as_dict=True)
+	return bool(v) and is_trial_offer(v.ms_term_duration, v.ms_billing_plan)
+
+
 def _get_resolver():
 	"""Devuelve el resolver de costo genérico de erpnext_proposals (indirección testeable)."""
 	from erpnext_proposals.erpnext_proposals.utils.item_cost import resolve_external_cost
@@ -297,9 +306,21 @@ def resolve_cost(item_code, transaction_date, currency, company):
 		target_currency=currency,
 	)
 	if ec.amount is None:
+		# sin_tipo_cambio / ambiguo_price_list: irresoluble → fail-closed, NO se degrada a 0.
 		raise QuoterError(
 			f"Costo externo irresoluble ({ec.source}) para {item_code!r} en {currency}: "
 			f"revise tipo de cambio / Price List de compra. No se degrada a 0."
+		)
+	if ec.source == SRC_SIN_COSTO:
+		# El resolver colapsa un Item Price real con rate 0 en 'sin_costo' (no distingue precio-0 de
+		# sin-precio). Un Trial Microsoft (P1M+None) SÍ tiene costo 0 legítimo; cualquier otro Item
+		# comprable sin fuente de costo es un error (p. ej. licencia mal sincronizada) → fail-closed,
+		# nunca cotizar aplicando margen sobre costo 0.
+		if _is_trial_item(item_code):
+			return 0.0
+		raise QuoterError(
+			f"Item comprable {item_code!r} sin fuente de costo (sin_costo): fail-closed. "
+			f"No se cotiza sobre costo 0 (revise el Buying Item Price / sincronizacion del catalogo)."
 		)
 	return flt(ec.amount)
 

@@ -175,9 +175,21 @@ class TestQuoter(FrappeTestCase):
 			with self.assertRaises(QuoterError):
 				resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME")
 
-	def test_resolve_cost_sin_costo_cero(self):
+	def test_resolve_cost_trial_sin_costo_es_cero_valido(self):
+		# Trial (P1M+None): el resolver colapsa el Item Price 0 en 'sin_costo', pero es costo 0 legítimo.
 		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
 			self.assertEqual(resolve_cost(self.trial, "2026-09-26", "USD", "ACME"), 0.0)
+
+	def test_resolve_cost_comprable_sin_costo_failclosed(self):
+		# Item comprable NO-Trial sin fuente de costo → error (no cotizar sobre 0).
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.a_annual_com, "2026-09-26", "USD", "ACME")
+
+	def test_resolve_cost_no_purchase_cero(self):
+		# no_purchase: el Item explícitamente no es comprable → 0 legítimo.
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "no_purchase")):
+			self.assertEqual(resolve_cost(self.a_annual_com, "2026-09-26", "USD", "ACME"), 0.0)
 
 	def test_add_to_quotation_end_to_end(self):
 		q = self._quotation()
