@@ -267,32 +267,41 @@ def _summary_for(item_code):
 	return _item_summary(item)
 
 
-def resolve_cost(item_code, transaction_date, currency):
-	"""FRONTERA con el resolver de costo genérico de erpnext_proposals (Item Price + FX por fecha).
+def _get_resolver():
+	"""Devuelve el resolver de costo genérico de erpnext_proposals (indirección testeable)."""
+	from erpnext_proposals.erpnext_proposals.utils.item_cost import resolve_external_cost
 
-	acti_customs NO reimplementa la selección de Price List ni la conversión FX: delega en el resolver
-	genérico de erpnext_proposals (refactor multimoneda en curso). Si ese resolver aún no está
-	disponible/actualizado en este checkout, fail-closed (NO se inventa un FX alternativo aquí).
-	Devuelve el costo por unidad en la moneda `currency` de la Quotation.
+	return resolve_external_cost
+
+
+def resolve_cost(item_code, transaction_date, currency, company):
+	"""FRONTERA con el resolver genérico de erpnext_proposals (Item Price + FX por fecha).
+
+	acti_customs NO reimplementa selección de Price List, FX ni consulta Currency Exchange: delega en
+	`resolve_external_cost(item, uom, transaction_date, company, target_currency)` y usa `ec.amount`
+	(el costo externo expresado en la moneda de la Quotation). Fail-closed sin degradar a 0 cuando el
+	costo es irresoluble (`amount is None`: `sin_tipo_cambio` / `ambiguo_price_list`). `sin_costo` /
+	`no_purchase` devuelven 0 legítimo (p. ej. Trial). Devuelve el costo por unidad en `currency`.
 	"""
 	try:
-		import inspect
-
-		from erpnext_proposals.erpnext_proposals.utils.item_cost import resolve_external_cost
+		resolver = _get_resolver()
 	except ImportError as exc:
 		raise QuoterError(
 			"Resolucion de costo pendiente: erpnext_proposals no esta instalado en este site."
 		) from exc
-	sig = inspect.signature(resolve_external_cost)
-	if "target_currency" not in sig.parameters:
-		raise QuoterError(
-			"Resolucion de costo multimoneda PENDIENTE: el resolver generico de erpnext_proposals "
-			"(target_currency/FX) aun no esta disponible en este checkout. Integracion diferida."
-		)
-	rate, _source = resolve_external_cost(
-		item_code, uom=STOCK_UOM, transaction_date=transaction_date, target_currency=currency
+	ec = resolver(
+		item_code,
+		uom=STOCK_UOM,
+		transaction_date=transaction_date,
+		company=company,
+		target_currency=currency,
 	)
-	return flt(rate)
+	if ec.amount is None:
+		raise QuoterError(
+			f"Costo externo irresoluble ({ec.source}) para {item_code!r} en {currency}: "
+			f"revise tipo de cambio / Price List de compra. No se degrada a 0."
+		)
+	return flt(ec.amount)
 
 
 # --- API whitelisted (para el diálogo en Quotation) ---------------------------
@@ -318,8 +327,8 @@ def get_price_preview(offer_key: str, qty: float, margin_pct: float, quotation: 
 	item_code = _load_valid_item(offer_key)
 	if not quotation:
 		raise QuoterError("Falta el contexto de Quotation para resolver el costo (moneda/fecha).")
-	q = frappe.db.get_value("Quotation", quotation, ["currency", "transaction_date"], as_dict=True)
-	cost = resolve_cost(item_code, q.transaction_date, q.currency)
+	q = frappe.db.get_value("Quotation", quotation, ["currency", "transaction_date", "company"], as_dict=True)
+	cost = resolve_cost(item_code, q.transaction_date, q.currency, q.company)
 	return price_summary(_summary_for(item_code), cost, qty, margin_pct)
 
 
@@ -331,7 +340,7 @@ def add_license_to_quotation(quotation: str, offer_key: str, qty: float, margin_
 	if q.docstatus != 0:
 		raise QuoterError("La Quotation no esta en Draft.")
 	item_code = _load_valid_item(offer_key)
-	cost = resolve_cost(item_code, q.transaction_date, q.currency)
+	cost = resolve_cost(item_code, q.transaction_date, q.currency, q.company)
 	summary = price_summary(_summary_for(item_code), cost, qty, margin_pct)
 	q.append("items", {"item_code": item_code, "qty": summary["qty"], "rate": summary["price_unit"]})
 	q.save()

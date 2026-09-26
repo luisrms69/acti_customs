@@ -3,6 +3,9 @@
 
 """Tests del selector/cotizador sobre Item (ADR-0003). Module test."""
 
+from collections import namedtuple
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -14,10 +17,23 @@ from acti_customs.acti_customizations.microsoft.quoter import (
 	build_required_row,
 	next_step,
 	price_summary,
+	resolve_cost,
 	resolve_path,
 	roundup2,
 )
 from acti_customs.acti_customizations.microsoft.test_materializer import _prereqs
+
+# Imita el ExternalCost NamedTuple del resolver de erpnext_proposals (amount ya en target_currency).
+_EC = namedtuple("EC", ["amount", "source", "source_amount", "source_currency", "normalized_currency"])
+
+
+def _fake_resolver(amount, source, currency="USD"):
+	"""Devuelve un resolver que ignora args y responde un ExternalCost fijo (para inyectar en tests)."""
+
+	def _r(item_code, uom=None, transaction_date=None, company=None, target_currency=None):
+		return _EC(amount, source, amount, "USD", target_currency or currency)
+
+	return _r
 
 
 def _row(**kw):
@@ -137,15 +153,42 @@ class TestQuoter(FrappeTestCase):
 		with self.assertRaises(QuoterError):
 			price_summary(self._summary(self.a_annual_com), cost=10, qty=1, margin_pct=100)
 
-	# --- frontera de costo: delega en erpnext_proposals; fail-closed si no está ---
-	def test_add_to_quotation_pendiente_resolver(self):
-		if _proposals_installed():
-			self.skipTest("erpnext_proposals presente: la resolucion de costo se valida en ese entorno.")
+	# --- frontera de costo: delega en resolve_external_cost (resolver inyectado) ---
+	_PATCH = "acti_customs.acti_customizations.microsoft.quoter._get_resolver"
+
+	def test_resolve_cost_usd_a_usd(self):
+		with patch(self._PATCH, return_value=_fake_resolver(504.0, "buying_item_price", "USD")):
+			self.assertEqual(resolve_cost(self.a_monthly_com, "2026-09-26", "USD", "ACME"), 504.0)
+
+	def test_resolve_cost_usd_a_mxn(self):
+		# el resolver YA devuelve amount en la moneda objetivo (MXN); acti_customs solo lo consume
+		with patch(self._PATCH, return_value=_fake_resolver(8568.0, "buying_item_price", "MXN")):
+			self.assertEqual(resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME"), 8568.0)
+
+	def test_resolve_cost_sin_tipo_cambio_failclosed(self):
+		with patch(self._PATCH, return_value=_fake_resolver(None, "sin_tipo_cambio")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME")
+
+	def test_resolve_cost_ambiguo_failclosed(self):
+		with patch(self._PATCH, return_value=_fake_resolver(None, "ambiguo_price_list")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME")
+
+	def test_resolve_cost_sin_costo_cero(self):
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
+			self.assertEqual(resolve_cost(self.trial, "2026-09-26", "USD", "ACME"), 0.0)
+
+	def test_add_to_quotation_end_to_end(self):
 		q = self._quotation()
 		if q is None:
 			self.skipTest("Site sin infraestructura de venta.")
-		with self.assertRaises(QuoterError):
-			add_license_to_quotation(q.name, self.a_monthly_com, qty=1, margin_pct=20)
+		with patch(self._PATCH, return_value=_fake_resolver(504.0, "buying_item_price", q.currency)):
+			res = add_license_to_quotation(q.name, self.a_monthly_com, qty=2, margin_pct=20)
+		q.reload()
+		self.assertEqual(len(q.items), 1)
+		self.assertEqual(q.items[0].rate, 630.0)  # ROUNDUP(504/(1-0.20),2)
+		self.assertEqual(res["amount"], 1260.0)
 
 	# --- required_items: item/qty/uom ---
 	def test_build_required_row_solo_item_qty_uom(self):
@@ -199,12 +242,3 @@ class TestQuoter(FrappeTestCase):
 		q.insert(ignore_permissions=True)
 		self._quotations.append(q.name)
 		return q
-
-
-def _proposals_installed():
-	try:
-		import erpnext_proposals
-
-		return True
-	except ImportError:
-		return False
