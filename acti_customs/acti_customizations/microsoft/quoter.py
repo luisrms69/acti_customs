@@ -82,8 +82,12 @@ def _display_labels(term_duration, billing_plan, segment, tags=None):
 
 
 def _candidates(selected):
-	"""Items Microsoft activos que cumplen la selección parcial (identidad por item_code)."""
-	filters = {"item_group": ITEM_GROUP, "disabled": 0}
+	"""Items Microsoft NCE activos que cumplen la selección parcial (identidad por item_code).
+
+	Mismo criterio NCE que el sync (`_plan`): solo Items con `ms_product_id` set. Items legacy/manuales
+	del mismo Item Group pero SIN `ms_product_id` NO son ofertas Microsoft NCE y quedan fuera del selector.
+	"""
+	filters = {"item_group": ITEM_GROUP, "disabled": 0, "ms_product_id": ["is", "set"]}
 	for k, v in (selected or {}).items():
 		if k in _ITEM_FIELD and v not in (None, ""):
 			filters[_ITEM_FIELD[k]] = v

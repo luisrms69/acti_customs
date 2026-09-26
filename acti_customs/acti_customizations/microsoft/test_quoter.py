@@ -9,7 +9,7 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, upsert_item
+from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM, upsert_item
 from acti_customs.acti_customizations.microsoft.quoter import (
 	QuoterError,
 	add_license_as_cost,
@@ -120,6 +120,37 @@ class TestQuoter(FrappeTestCase):
 		r = resolve_path({"product_title": "Prod B"})
 		self.assertIn("resolved", r)
 		self.assertEqual(r["resolved"]["item"], self.trial)
+
+	def _legacy_item(self):
+		"""Item legacy/manual en el mismo Item Group pero SIN ms_product_id (no NCE)."""
+		doc = frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "LEGACY-NO-NCE-SEL",
+				"item_name": "Legacy no NCE (selector)",
+				"item_group": ITEM_GROUP,
+				"stock_uom": STOCK_UOM,
+				"is_stock_item": 0,
+			}
+		).insert(ignore_permissions=True)
+		return doc.name
+
+	def test_selector_excluye_items_sin_ms_product_id(self):
+		# Mismo criterio NCE que el sync (_plan): el selector solo considera Items con ms_product_id set.
+		self._legacy_item()
+		# 1) el legacy NO aparece como opción de primer paso (no infla la lista de Producto)...
+		r = next_step({})
+		self.assertEqual(r["field"], "product_title")
+		values = {o["value"] for o in r["options"]}
+		self.assertEqual(values, {"Office 365 E3", "Prod B"})  # solo los NCE reales; sin opción en blanco
+		self.assertNotIn("", values)  # ms_product_title NULL del legacy no crea opción vacía
+		self.assertNotIn("Legacy no NCE (selector)", values)
+		# 2) ...y los Items NCE siguen resolviéndose igual (sin cambio de comportamiento).
+		self.assertEqual(
+			next_step({"product_title": "Office 365 E3", "billing_plan": "Monthly"})["resolved"]["item"],
+			self.a_monthly_com,
+		)
+		self.assertEqual(resolve_path({"product_title": "Prod B"})["resolved"]["item"], self.trial)
 
 	# --- pricing bruto puro (costo como entrada; no recalcula /12) ---
 	def _summary(self, item, **kw):
