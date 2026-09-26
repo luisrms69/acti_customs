@@ -143,6 +143,7 @@ def set_item_default_price_list(item_code, company):
 
 	No toca defaults de otras Company ni otros campos del default de esta Company.
 	"""
+	ensure_price_list()  # el default_price_list debe apuntar a una Price List existente (link válido)
 	doc = frappe.get_doc("Item", item_code)
 	for row in doc.item_defaults or []:
 		if row.company == company:
