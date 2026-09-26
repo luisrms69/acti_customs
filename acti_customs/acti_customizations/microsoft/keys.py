@@ -74,7 +74,7 @@ def build_item_code(product_id, sku_id, term_duration, billing_plan, segment):
 # deben mostrarse. Item.item_name es varchar(140); ~31% de las ofertas exceden 140
 # con los seis atributos completos. El nombre capado abrevia SOLO los dos titulos
 # (nunca las 4 dimensiones cortas), y los titulos completos se conservan en
-# ms_product_title / ms_sku_title y en Microsoft Offer.
+# ms_product_title / ms_sku_title.
 # ---------------------------------------------------------------------------
 
 NAME_SEP = " | "
@@ -119,7 +119,7 @@ def build_item_name_capped(
 
 	Solo se abrevian los dos titulos (ProductTitle/SkuTitle) y de forma equilibrada;
 	ProductId/TermDuration/BillingPlan/Segment quedan siempre intactos. Los titulos
-	completos se conservan aparte (ms_product_title/ms_sku_title, Microsoft Offer).
+	completos se conservan aparte (ms_product_title/ms_sku_title).
 	"""
 	full = build_item_name(product_title, product_id, sku_title, term_duration, billing_plan, segment)
 	if len(full) <= maxlen:
