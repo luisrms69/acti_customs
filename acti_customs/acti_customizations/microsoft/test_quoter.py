@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import flt
 
 from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM, upsert_item
 from acti_customs.acti_customizations.microsoft.quoter import (
@@ -17,6 +18,7 @@ from acti_customs.acti_customizations.microsoft.quoter import (
 	build_required_row,
 	next_step,
 	price_summary,
+	require_whole_qty,
 	resolve_cost,
 	resolve_path,
 	roundup2,
@@ -152,6 +154,63 @@ class TestQuoter(FrappeTestCase):
 		)
 		self.assertEqual(resolve_path({"product_title": "Prod B"})["resolved"]["item"], self.trial)
 
+	def _shared_skuid_items(self):
+		"""Dos ofertas que comparten product_title+sku_title pero difieren en sku_id (NO visible) y term."""
+		a = upsert_item(
+			_row(
+				product_title="Prod C",
+				product_id="PC",
+				sku_title="Sku C",
+				sku_id="10",
+				term_duration="P1M",
+				billing_plan="Monthly",
+				segment="Commercial",
+				unit_price=50,
+			)
+		)
+		b = upsert_item(
+			_row(
+				product_title="Prod C",
+				product_id="PC",
+				sku_title="Sku C",
+				sku_id="20",
+				term_duration="P1Y",
+				billing_plan="Annual",
+				segment="Commercial",
+				unit_price=120,
+			)
+		)
+		return a, b
+
+	def test_sku_id_ambiguo_no_congela_gui(self):
+		# Regresión (bloqueador GUI): un sku_title con >1 sku_id es una ambigüedad en una dimensión
+		# NO visible. El JS solo envía dimensiones VISIBLE (product_title/sku_title/term/billing/segment);
+		# resolve_path NO debe emitir un paso sku_id/product_id (el GUI no puede presentarlo) ni congelarse:
+		# difiere el disambiguador interno y pide una dimensión VISIBLE.
+		a, b = self._shared_skuid_items()
+		r = resolve_path({"product_title": "Prod C", "sku_title": "Sku C"})
+		self.assertNotIn("resolved", r)
+		self.assertNotIn("error", r)
+		fields = [s["field"] for s in r["steps"]]
+		self.assertNotIn("sku_id", fields)  # dimensión no-visible: nunca se expone como paso
+		self.assertNotIn("product_id", fields)
+		amb = [s for s in r["steps"] if s.get("ambiguous")]
+		self.assertTrue(amb and amb[0]["field"] == "term_duration")  # avanza a compromiso (visible)
+		# al elegir la dimensión visible, la oferta correcta resuelve (sku_id se fija solo)
+		r2 = resolve_path({"product_title": "Prod C", "sku_title": "Sku C", "term_duration": "P1Y"})
+		self.assertIn("resolved", r2)
+		self.assertEqual(r2["resolved"]["item"], b)
+		# y el camino P1M resuelve la otra oferta
+		r3 = resolve_path({"product_title": "Prod C", "sku_title": "Sku C", "term_duration": "P1M"})
+		self.assertEqual(r3["resolved"]["item"], a)
+
+	def test_next_step_difiere_dimension_no_visible_ambigua(self):
+		# next_step (API paralela) también difiere sku_id ambiguo y pide la dimensión visible.
+		self._shared_skuid_items()
+		r = next_step({"product_title": "Prod C", "sku_title": "Sku C"})
+		self.assertNotIn("resolved", r)
+		self.assertEqual(r.get("field"), "term_duration")  # no "sku_id"
+
 	# --- pricing bruto puro (costo como entrada; no recalcula /12) ---
 	def _summary(self, item, **kw):
 		base = {
@@ -228,6 +287,30 @@ class TestQuoter(FrappeTestCase):
 		with patch(self._PATCH, return_value=_fake_resolver(0.0, "no_purchase")):
 			self.assertEqual(resolve_cost(self.a_annual_com, "2026-09-26", "USD", "ACME"), 0.0)
 
+	# --- cantidad entera (licencias Microsoft, sin fracciones) ---
+	def test_require_whole_qty_acepta_enteros(self):
+		for n in (1, 2, 10):
+			self.assertEqual(require_whole_qty(n), n)
+			self.assertEqual(require_whole_qty(float(n)), n)  # 2.0 == entero
+		self.assertIsInstance(require_whole_qty(3), int)
+
+	def test_require_whole_qty_rechaza_fraccion_y_cero(self):
+		for bad in (1.5, 0.1, 2.99, 3.5):
+			with self.assertRaises(QuoterError):
+				require_whole_qty(bad)
+		for bad in (0, -1):
+			with self.assertRaises(QuoterError):
+				require_whole_qty(bad)
+
+	def test_qty_3_5_nunca_se_convierte_en_3(self):
+		# 3.5 debe LANZAR, no devolver 3: prohibida la coerción/truncado silencioso (el bug del Int).
+		try:
+			result = require_whole_qty(3.5)
+		except QuoterError:
+			result = "raised"
+		self.assertEqual(result, "raised")
+		self.assertNotEqual(result, 3)
+
 	def test_add_to_quotation_end_to_end(self):
 		q = self._quotation()
 		if q is None:
@@ -238,6 +321,33 @@ class TestQuoter(FrappeTestCase):
 		self.assertEqual(len(q.items), 1)
 		self.assertEqual(q.items[0].rate, 630.0)  # ROUNDUP(504/(1-0.20),2)
 		self.assertEqual(res["amount"], 1260.0)
+
+	def test_add_to_quotation_rechaza_fraccion(self):
+		# 'Agregar a cotización' con 3.5 licencias → QuoterError (guard antes de resolver costo).
+		# No se agrega NINGUNA línea: ni 3.5 ni un 3 truncado.
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		with self.assertRaises(QuoterError):
+			add_license_to_quotation(q.name, self.a_monthly_com, qty=3.5, margin_pct=20)
+		q.reload()
+		self.assertEqual(len(q.items), 0)
+		self.assertNotIn(3.0, [flt(i.qty) for i in q.items])  # jamás se coerciona a 3
+
+	def test_add_to_quotation_acepta_enteros_e2e(self):
+		# 'Agregar a cotización' sigue funcionando con 1, 2 y 10 (enteros). Items distintos por fila
+		# (ERPNext rechaza el mismo item repetido salvo Selling Setting específico).
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		casos = [(self.a_monthly_com, 1), (self.a_annual_com, 2), (self.a_annual_edu, 10)]
+		with patch(self._PATCH, return_value=_fake_resolver(100.0, "buying_item_price", q.currency)):
+			for item, n in casos:
+				res = add_license_to_quotation(q.name, item, qty=n, margin_pct=20)
+				self.assertEqual(res["qty"], n)
+		q.reload()
+		self.assertEqual(len(q.items), 3)
+		self.assertEqual({flt(i.qty) for i in q.items}, {1.0, 2.0, 10.0})
 
 	# --- required_items: item/qty/uom ---
 	def test_build_required_row_solo_item_qty_uom(self):

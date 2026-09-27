@@ -150,6 +150,10 @@ def next_step(selected):
 			selected[field] = values[0]
 			cands = [c for c in cands if _dim(c, field) == values[0]]
 			continue
+		if field not in VISIBLE_FIELDS:
+			# disambiguador interno (product_id/sku_id) ambiguo: se DIFIERE (el GUI no lo presenta);
+			# no bloquea ni filtra — las dimensiones visibles terminan de fijar la oferta.
+			continue
 		return {
 			"field": field,
 			"label": _LABELS.get(field, field),
@@ -162,7 +166,13 @@ def next_step(selected):
 
 
 def resolve_path(selected):
-	"""Resolución progresiva CON selecciones editables (ver detalle en la versión previa)."""
+	"""Resolución progresiva CON selecciones editables (ver detalle en la versión previa).
+
+	`product_id`/`sku_id` NO son dimensiones visibles del GUI: son disambiguadores internos que
+	"colapsan solos salvo ambigüedad real". Cuando colapsan a un único valor se aplican como filtro;
+	cuando quedan ambiguos NO generan un paso (el GUI no puede presentarlos) ni detienen la resolución:
+	se DIFIEREN y las dimensiones visibles (compromiso/facturación/segmento) terminan de fijar la oferta.
+	"""
 	sel = dict(selected or {})
 	running = {}
 	steps = []
@@ -178,16 +188,20 @@ def resolve_path(selected):
 		chosen = sel.get(field)
 		if chosen not in values:
 			chosen = values[0] if len(values) == 1 else None
-		if field in VISIBLE_FIELDS or len(values) > 1:
-			steps.append(
-				{
-					"field": field,
-					"label": _LABELS.get(field, field),
-					"options": [{"value": v, "label": _value_label(field, v)} for v in values],
-					"value": chosen,
-					"ambiguous": chosen is None,
-				}
-			)
+		if field not in VISIBLE_FIELDS:
+			# disambiguador interno (product_id/sku_id): filtra solo si colapsa; si es ambiguo, difiere.
+			if len(values) == 1:
+				running[field] = values[0]
+			continue
+		steps.append(
+			{
+				"field": field,
+				"label": _LABELS.get(field, field),
+				"options": [{"value": v, "label": _value_label(field, v)} for v in values],
+				"value": chosen,
+				"ambiguous": chosen is None,
+			}
+		)
 		if chosen is None:
 			return {"steps": steps, "selected": running}
 		running[field] = chosen
@@ -198,6 +212,23 @@ def resolve_path(selected):
 
 
 # --- Pricing (margen bruto custom; el costo llega ya resuelto) -----------------
+
+
+def require_whole_qty(qty):
+	"""Cantidad ENTERA para licencias Microsoft (no fracciones). Devuelve el entero validado.
+
+	Guard específico del cotizador Microsoft (NO una validación global de UOM): `E48 - Servicio` es
+	compartida por servicios que sí admiten fracciones, así que no se marca whole-number globalmente.
+	La regla "sin fracciones" aplica solo a las ofertas Microsoft, en los entry points de este módulo.
+	"""
+	q = flt(qty)
+	if q <= 0:
+		raise QuoterError("La cantidad debe ser mayor a 0.")
+	if q != int(q):
+		raise QuoterError(
+			"Las licencias Microsoft no admiten cantidades fraccionarias; use un numero entero."
+		)
+	return int(q)
 
 
 def roundup2(value):
@@ -356,6 +387,7 @@ def add_license_to_quotation(quotation: str, offer_key: str, qty: float, margin_
 	q.check_permission("write")
 	if q.docstatus != 0:
 		raise QuoterError("La Quotation no esta en Draft.")
+	qty = require_whole_qty(qty)
 	item_code = _load_valid_item(offer_key)
 	cost = resolve_cost(item_code, q.transaction_date, q.currency, q.company)
 	summary = price_summary(_summary_for(item_code), cost, qty, margin_pct)
@@ -378,9 +410,7 @@ def add_license_as_cost(quotation: str, offer_key: str, qty: float):
 
 	El costo y el análisis económico los resuelve erpnext_proposals (fuente única: Item Price + FX).
 	"""
-	qty = flt(qty)
-	if qty <= 0:
-		raise QuoterError("La cantidad debe ser mayor a 0.")
+	qty = require_whole_qty(qty)
 	q = frappe.get_doc("Quotation", quotation)
 	q.check_permission("write")
 	if q.docstatus != 0:
