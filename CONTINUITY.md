@@ -4,29 +4,40 @@
 
 ## Estado actual
 
-- **Bloque 1 — Catálogo Microsoft (Excel → Microsoft Offer → Items):** implementado, liberado
-  como `v0.1.0` (mergeado a `version-16`).
-  - DocType `Microsoft Offer` (identidad `offer_key`), DocType Single `Microsoft Catalog Sync`
-    (Dry Run / Aplicar), Custom Fields `ms_*` en Item (incl. `ms_offer_label`).
-  - Materializador `materialize_item` (idempotente por `offer_key`) y sincronizador
-    `sync_microsoft_catalog` (dry-run/apply, inactivación sin borrado, preflight fiscal fail-closed).
-  - Naming `SkuTitle | compromiso | facturación | segmento`; Trials `Prueba 1 mes`.
-- **Bloque 2 — Cotizador Microsoft en Quotation:** implementado y validado (visual en un site con
-  `erpnext_proposals`). Selector progresivo (`resolve_path`) con selecciones editables; botón visible
-  solo en Borrador. Dos destinos excluyentes por acción:
-  - **Agregar a cotización** → `Quotation.items` (rate de venta con margen).
-  - **Agregar como costo** → `required_items` (solo item/qty/uom). El costo/economía los resuelve
-    `erpnext_proposals` (fuente única); `acti_customs` no escribe metadata económica. Ver ADR-0002.
-  - Integración aditiva (`doctype_js`), sin override de Quotation ni cambios en core/`erpnext_proposals`.
-    Fail-closed sin `erpnext_proposals`.
-- **Versión:** 0.2.0.
+- **Bloque 1 — Catálogo Microsoft (Excel → Items):** liberado como `v0.1.0` sobre el modelo antiguo
+  (DocType `Microsoft Offer`). **Superado por el Bloque 3** (ver ADR-0003).
+- **Bloque 2 — Cotizador Microsoft en Quotation:** liberado como `v0.2.0`. Selector progresivo y dos
+  destinos excluyentes (venta / costo). **Base sobre la que se hizo el rework nativo.**
+- **Bloque 3 — Catálogo Microsoft NATIVO (rework, ADR-0003):** implementado y validado en un site con
+  `erpnext_proposals` y datos reales (3932 ofertas). Cambios estructurales:
+  - **Elimina el DocType `Microsoft Offer`.** 1 oferta Microsoft = 1 `Item` ERPNext; identidad =
+    `item_code` determinista `MS-<ProductId>-<SkuId>-<TermDuration>-<BillingPlan>-<Segment>`.
+  - **Costo = fuente única en `Item Price` de compra** (Buying Price List `Microsoft NCE - Compra`, USD),
+    con vigencias (`valid_from`/`valid_upto`). Regla `/12` aplicada en el sync (P1Y+Monthly). `ERP Price`
+    del Excel se ignora. `Item Default.default_price_list` por Company (selección explícita, fail-closed).
+  - **Sync idempotente** (`sync.py`): UPSERT de Item + Item Price + Item Default; ausentes → disable +
+    cierre de precio (sin borrar histórico); reaparición → reactiva. Administra solo Items NCE
+    (`ms_product_id` set); no toca legacy del mismo Item Group.
+  - **Selector sobre `Item`** (`quoter.py`), sin `Microsoft Offer`. `product_id`/`sku_id` son
+    disambiguadores internos que se difieren si son ambiguos (no congelan el GUI; las dimensiones
+    visibles fijan la oferta). Margen bruto dinámico `ROUNDUP(costo/(1-margen),2)`.
+  - **Costo vía frontera genérica** `erpnext_proposals.resolve_external_cost(item, uom, transaction_date,
+    company, target_currency)` (Item Price + FX por fecha/moneda). `sin_costo` = fail-closed (no cotiza
+    sobre 0); Trial 0 legítimo solo si el resolver devuelve `buying_item_price`. `acti_customs` NO
+    reimplementa Price List/FX ni escribe economía.
+  - **Cantidades enteras** en licencias: campo `Int` en el modal + bloqueo de captura/paste de fracciones
+    (el input impide `.`/no-dígitos, "3.5" no llega a truncarse) + guard server-side `require_whole_qty()`.
+    No se toca la UOM `E48 - Servicio` (compartida con servicios fraccionables).
+  - **ADR-0003** documenta el rework y **supersede ADR-0001**; actualiza ADR-0002.
+- **Versión:** 0.3.0 (MINOR — nueva arquitectura del catálogo/cotizador).
 
 ## En curso / siguiente
 
-- Rama `feat/microsoft-quotation-selector` en revisión hacia PR contra `version-16`.
+- Rama `feat/microsoft-native-catalog` lista para PR contra `version-16` (bump `0.2.0 → 0.3.0`).
 
 ## Fuera de alcance (etapas posteriores)
 
-- Resolver `sin_costo = 0` de Items Microsoft en la fuente genérica de costo (responsabilidad de
-  `erpnext_proposals` / costeo del Item) — tema independiente.
+- Multi-moneda de venta más allá de lo que resuelve la frontera genérica de costo (FX nativo).
 - Recurrencia / suscripción de licencias.
+- Limpieza física de la tabla huérfana `tabMicrosoft Offer` (migrate eliminó la metadata del DocType;
+  la tabla y sus filas quedaron huérfanas — requiere decisión/`DROP TABLE` explícito, no automático).
