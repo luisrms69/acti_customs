@@ -356,14 +356,14 @@ def resolve_cost(item_code, transaction_date, currency, company):
 
 
 @frappe.whitelist()
-def get_next_options(selected=None):
+def get_next_options(selected: str | None = None):
 	if isinstance(selected, str):
 		selected = frappe.parse_json(selected) if selected else {}
 	return next_step(selected or {})
 
 
 @frappe.whitelist()
-def get_selection_path(selected=None):
+def get_selection_path(selected: str | None = None):
 	if isinstance(selected, str):
 		selected = frappe.parse_json(selected) if selected else {}
 	return resolve_path(selected or {})
