@@ -16,6 +16,7 @@ from acti_customs.acti_customizations.microsoft.quoter import (
 	add_license_as_cost,
 	add_license_to_quotation,
 	build_required_row,
+	get_price_preview,
 	next_step,
 	price_summary,
 	require_whole_qty,
@@ -27,6 +28,9 @@ from acti_customs.acti_customizations.microsoft.test_materializer import _prereq
 
 # Imita el ExternalCost NamedTuple del resolver de erpnext_proposals (amount ya en target_currency).
 _EC = namedtuple("EC", ["amount", "source", "source_amount", "source_currency", "normalized_currency"])
+
+# Contexto económico explícito del formulario (Quotation nueva/sin persistir).
+_NEW_CTX = {"company": "ACME", "currency": "MXN", "transaction_date": "2026-09-28"}
 
 
 def _fake_resolver(amount, source, currency="USD"):
@@ -348,6 +352,59 @@ class TestQuoter(FrappeTestCase):
 		q.reload()
 		self.assertEqual(len(q.items), 3)
 		self.assertEqual({flt(i.qty) for i in q.items}, {1.0, 2.0, 10.0})
+
+	# --- get_price_preview: contexto persistido (v0.3.0) vs contexto explícito (Quotation nueva) ---
+	def test_get_price_preview_persistida_sigue_funcionando(self):
+		# v0.3.0: con Quotation persistida el contexto se deriva de la BD.
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		with patch(self._PATCH, return_value=_fake_resolver(504.0, "buying_item_price", q.currency)):
+			s = get_price_preview(self.a_monthly_com, qty=2, margin_pct=20, quotation=q.name)
+		self.assertEqual(s["cost_unit"], 504.0)
+		self.assertEqual(s["price_unit"], 630.0)  # ROUNDUP(504/0.8,2)
+
+	def test_get_price_preview_contexto_explicito_sin_quotation(self):
+		# Quotation nueva (no existe en BD): el preview usa company/currency/transaction_date del formulario.
+		with patch(self._PATCH, return_value=_fake_resolver(504.0, "buying_item_price", "MXN")):
+			s = get_price_preview(self.a_monthly_com, qty=2, margin_pct=20, **_NEW_CTX)
+		self.assertEqual(s["cost_unit"], 504.0)
+		self.assertEqual(s["price_unit"], 630.0)
+
+	def test_get_price_preview_failclosed_sin_company(self):
+		with self.assertRaises(QuoterError):
+			get_price_preview(
+				self.a_monthly_com, qty=2, margin_pct=20, currency="MXN", transaction_date="2026-09-28"
+			)
+
+	def test_get_price_preview_failclosed_sin_currency(self):
+		with self.assertRaises(QuoterError):
+			get_price_preview(
+				self.a_monthly_com, qty=2, margin_pct=20, company="ACME", transaction_date="2026-09-28"
+			)
+
+	def test_get_price_preview_failclosed_sin_fecha(self):
+		with self.assertRaises(QuoterError):
+			get_price_preview(self.a_monthly_com, qty=2, margin_pct=20, company="ACME", currency="MXN")
+
+	def test_get_price_preview_rate0_legitimo(self):
+		# buying_item_price rate 0 (p. ej. Trial) sigue siendo costo 0 legítimo, no error.
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "buying_item_price", "MXN")):
+			s = get_price_preview(self.trial, qty=5, margin_pct=20, **_NEW_CTX)
+		self.assertEqual(s["cost_unit"], 0.0)
+		self.assertEqual(s["price_unit"], 0.0)
+
+	def test_get_price_preview_fx_via_resolver(self):
+		# El costo (y su conversión FX) sigue viniendo del resolver existente: amount del resolver → cost_unit.
+		with patch(self._PATCH, return_value=_fake_resolver(8568.0, "buying_item_price", "MXN")):
+			s = get_price_preview(self.a_monthly_com, qty=1, margin_pct=0, **_NEW_CTX)
+		self.assertEqual(s["cost_unit"], 8568.0)
+
+	def test_get_price_preview_sin_costo_failclosed(self):
+		# sin_costo sigue siendo fail-closed también en el flujo de Quotation nueva.
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo", "MXN")):
+			with self.assertRaises(QuoterError):
+				get_price_preview(self.a_monthly_com, qty=2, margin_pct=20, **_NEW_CTX)
 
 	# --- required_items: item/qty/uom ---
 	def test_build_required_row_solo_item_qty_uom(self):
