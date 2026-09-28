@@ -46,7 +46,16 @@ acti_customs.ms.open_dialog = function (frm) {
 		fieldname: "detalle_sb",
 		label: __("Cantidad y margen"),
 	});
-	fields.push({ fieldtype: "Float", fieldname: "qty", label: __("Cantidad"), default: 1 });
+	// Cantidad: Int (default visible 1). El problema real de Int es que Frappe deja teclear "3.5" y
+	// luego lo TRUNCA a 3; la solución es impedir desde el input la captura de "." "," y no-dígitos
+	// (ver wire de sanitización del input más abajo), NO cambiar de tipo. No se toca la UOM E48.
+	fields.push({
+		fieldtype: "Int",
+		fieldname: "qty",
+		label: __("Cantidad"),
+		default: 1,
+		description: __("Solo enteros positivos (sin fracciones)"),
+	});
 	fields.push({ fieldtype: "Column Break" });
 	fields.push({
 		fieldtype: "Float",
@@ -76,6 +85,18 @@ acti_customs.ms.open_dialog = function (frm) {
 
 	const fmt = (v) => format_currency(flt(v), cur);
 
+	// Validación de cantidad: entero positivo. Devuelve un mensaje de error o "" si es válida.
+	// NO coerciona el valor (no convierte 3.5 en 3): solo diagnostica para avisar/bloquear.
+	const qty_error = () => {
+		const q = flt(d.get_value("qty"));
+		if (!(q > 0)) return __("La cantidad debe ser mayor a 0.");
+		if (q % 1 !== 0)
+			return __(
+				"Las licencias Microsoft no admiten cantidades fraccionarias; use un número entero."
+			);
+		return "";
+	};
+
 	// Muestra u oculta el bloque de detalle (cantidad/margen/resumen/acciones). Antes de resolver una
 	// oferta exacta, todo esto permanece oculto.
 	const show_detail = (on) => {
@@ -103,6 +124,14 @@ acti_customs.ms.open_dialog = function (frm) {
 
 	const render_preview = () => {
 		if (!resolved) return;
+		const qerr = qty_error();
+		if (qerr) {
+			// Cantidad inválida: mostrar aviso en el resumen y NO calcular precio (no coerciona el valor).
+			d.fields_dict.preview.$wrapper.html(
+				`<div class='text-danger'>${frappe.utils.escape_html(qerr)}</div>`
+			);
+			return;
+		}
 		frappe
 			.call({
 				method: "acti_customs.acti_customizations.microsoft.quoter.get_price_preview",
@@ -110,6 +139,7 @@ acti_customs.ms.open_dialog = function (frm) {
 					offer_key: resolved.offer_key,
 					qty: d.get_value("qty"),
 					margin_pct: d.get_value("margin_pct"),
+					quotation: frm.doc.name,
 				},
 			})
 			.then((r) => {
@@ -183,6 +213,12 @@ acti_customs.ms.open_dialog = function (frm) {
 
 	function do_add(destino) {
 		if (!resolved) return;
+		// Bloqueo de fracciones ANTES de llamar al backend: aviso y no se agrega (venta ni costo).
+		const qerr = qty_error();
+		if (qerr) {
+			frappe.msgprint({ title: __("Cantidad inválida"), message: qerr, indicator: "red" });
+			return;
+		}
 		const qty = d.get_value("qty");
 		const common = { quotation: frm.doc.name, offer_key: resolved.offer_key, qty: qty };
 		let method, args, msg_ok;
@@ -214,6 +250,18 @@ acti_customs.ms.open_dialog = function (frm) {
 	});
 	d.fields_dict.qty.$wrapper.on("change", "input", render_preview);
 	d.fields_dict.margin_pct.$wrapper.on("change", "input", render_preview);
+
+	// Cantidad: impedir DESDE EL INPUT capturar "." "," "e" "-" "+" o cualquier no-dígito, para que
+	// "3.5" NUNCA llegue a Frappe a truncarse a 3. keypress bloquea el caracter; input sanea pegado.
+	const $qty = d.fields_dict.qty.$input;
+	$qty.on("keypress", (e) => {
+		if (e.key && e.key.length === 1 && !/[0-9]/.test(e.key)) e.preventDefault();
+	});
+	$qty.on("input", () => {
+		const raw = $qty.val() || "";
+		const clean = raw.replace(/[^0-9]/g, "");
+		if (clean !== raw) $qty.val(clean); // conserva solo dígitos; no permite fracciones
+	});
 
 	// Estado inicial: oculta detalle/acciones y ejecuta de inmediato el primer paso del selector.
 	show_detail(false);

@@ -3,6 +3,10 @@
 
 frappe.ui.form.on("Microsoft Catalog Sync", {
 	refresh(frm) {
+		// Valor inicial de la Company objetivo: default global (el usuario puede cambiarlo).
+		if (!frm.doc.target_company && frappe.defaults.get_default("company")) {
+			frm.set_value("target_company", frappe.defaults.get_default("company"));
+		}
 		const run = (dry_run) => {
 			if (!frm.doc.catalog_file) {
 				frappe.msgprint(__("Adjunte primero el archivo .xlsx del catalogo."));
@@ -34,8 +38,9 @@ frappe.ui.form.on("Microsoft Catalog Sync", {
 
 		frm.add_custom_button(__("Dry Run"), () => run(true));
 		frm.add_custom_button(__("Aplicar catalogo"), () => {
-			frappe.confirm(__("Esto creara/actualizara Microsoft Offer e Items. Continuar?"), () =>
-				run(false)
+			frappe.confirm(
+				__("Esto creara/actualizara Items y sus precios (Buying Item Price). Continuar?"),
+				() => run(false)
 			);
 		});
 	},

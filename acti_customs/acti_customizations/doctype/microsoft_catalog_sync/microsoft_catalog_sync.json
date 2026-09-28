@@ -6,6 +6,7 @@
  "field_order": [
   "intro",
   "catalog_file",
+  "target_company",
   "results_section",
   "last_run_dry_run",
   "last_run_at",
@@ -15,12 +16,19 @@
   {
    "fieldname": "intro",
    "fieldtype": "HTML",
-   "options": "<p>Adjunte el Excel del catalogo Microsoft (hoja <b>Jan_NCE_LicenseBasedPL_GA_MX</b>) y use <b>Dry Run</b> para analizar sin escribir, o <b>Aplicar catalogo</b> para sincronizar Microsoft Offer e Items. acti_customs no administra catalogos SAT/UOM: si falta una dependencia fiscal, la carga se detiene.</p>"
+   "options": "<p>Adjunte el Excel del catalogo Microsoft (hoja <b>Jan_NCE_LicenseBasedPL_GA_MX</b>) y use <b>Dry Run</b> para analizar sin escribir, o <b>Aplicar catalogo</b> para sincronizar los <b>Items</b> y sus costos como <b>Buying Item Price</b> (Price List 'Microsoft NCE - Compra', USD), y fijar el <b>Item Default</b> de la Company objetivo. acti_customs no administra catalogos SAT/UOM: si falta una dependencia fiscal, la carga se detiene.</p>"
   },
   {
    "fieldname": "catalog_file",
    "fieldtype": "Attach",
    "label": "Catalogo Microsoft (.xlsx)"
+  },
+  {
+   "fieldname": "target_company",
+   "fieldtype": "Link",
+   "options": "Company",
+   "label": "Company objetivo",
+   "description": "Company para la que se fija el Item Default. Obligatoria si el site tiene varias Companies."
   },
   {
    "fieldname": "results_section",

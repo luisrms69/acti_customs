@@ -1,64 +1,47 @@
 # Copyright (c) 2025, Consultoria en Negocios y Aplicaciones and contributors
 # For license information, please see license.txt
 
-"""Tests del selector/cotizador Microsoft (Bloque 2). Module test (sin generacion de
-test-records de Item). Crea un catalogo pequeño de prueba; rollback por test."""
+"""Tests del selector/cotizador sobre Item (ADR-0003). Module test."""
+
+from collections import namedtuple
+from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import flt
 
-from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM, materialize_item
+from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM, upsert_item
 from acti_customs.acti_customizations.microsoft.quoter import (
 	QuoterError,
 	add_license_as_cost,
 	add_license_to_quotation,
 	build_required_row,
-	compute_cost,
 	next_step,
 	price_summary,
+	require_whole_qty,
+	resolve_cost,
 	resolve_path,
 	roundup2,
 )
+from acti_customs.acti_customizations.microsoft.test_materializer import _prereqs
+
+# Imita el ExternalCost NamedTuple del resolver de erpnext_proposals (amount ya en target_currency).
+_EC = namedtuple("EC", ["amount", "source", "source_amount", "source_currency", "normalized_currency"])
 
 
-def _prereqs():
-	if not frappe.db.exists("UOM", STOCK_UOM):
-		frappe.get_doc({"doctype": "UOM", "uom_name": STOCK_UOM}).insert(ignore_permissions=True)
-	if not frappe.db.exists("Item Group", ITEM_GROUP):
-		# El site de CI (erpnext sin setup wizard) puede no tener la raíz "All Item Groups".
-		parent = frappe.db.get_value("Item Group", {"is_group": 1}, "name")
-		if not parent:
-			root = frappe.get_doc(
-				{"doctype": "Item Group", "item_group_name": "All Item Groups", "is_group": 1}
-			)
-			root.insert(ignore_permissions=True)
-			parent = root.name
-		frappe.get_doc(
-			{
-				"doctype": "Item Group",
-				"item_group_name": ITEM_GROUP,
-				"parent_item_group": parent,
-				"is_group": 0,
-			}
-		).insert(ignore_permissions=True)
+def _fake_resolver(amount, source, currency="USD"):
+	"""Devuelve un resolver que ignora args y responde un ExternalCost fijo (para inyectar en tests)."""
+
+	def _r(item_code, uom=None, transaction_date=None, company=None, target_currency=None):
+		return _EC(amount, source, amount, "USD", target_currency or currency)
+
+	return _r
 
 
-def _offer(materialize=True, **kw):
-	data = dict(
-		{
-			"doctype": "Microsoft Offer",
-			"market": "MX",
-			"currency": "USD",
-			"effective_start_date": "2025-01-01",
-			"effective_end_date": "9999-11-30",
-			"is_active": 1,
-		},
-		**kw,
-	)
-	off = frappe.get_doc(data).insert(ignore_permissions=True)
-	if materialize:
-		materialize_item(off.name)
-	return off.name
+def _row(**kw):
+	base = {"product_title": "Office 365 E3", "product_id": "PA", "sku_title": "Sku A", "sku_id": "1"}
+	base.update(kw)
+	return base
 
 
 class TestQuoter(FrappeTestCase):
@@ -66,195 +49,328 @@ class TestQuoter(FrappeTestCase):
 		self._quotations = []
 		self._cleanup()
 		_prereqs()
-		# Catalogo de prueba.
-		self.o_annual_com = _offer(
-			product_title="Prod A",
-			product_id="PA",
-			sku_title="Sku A",
-			sku_id="1",
-			term_duration="P1Y",
-			billing_plan="Annual",
-			segment="Commercial",
-			unit_price=120,
+		self.a_annual_com = upsert_item(
+			_row(term_duration="P1Y", billing_plan="Annual", segment="Commercial", unit_price=120)
 		)
-		self.o_monthly_com = _offer(
-			product_title="Prod A",
-			product_id="PA",
-			sku_title="Sku A",
-			sku_id="1",
-			term_duration="P1Y",
-			billing_plan="Monthly",
-			segment="Commercial",
-			unit_price=120,
+		self.a_monthly_com = upsert_item(
+			_row(term_duration="P1Y", billing_plan="Monthly", segment="Commercial", unit_price=120)
 		)
-		self.o_annual_edu = _offer(
-			product_title="Prod A",
-			product_id="PA",
-			sku_title="Sku A",
-			sku_id="1",
-			term_duration="P1Y",
-			billing_plan="Annual",
-			segment="Education",
-			unit_price=200,
+		self.a_annual_edu = upsert_item(
+			_row(term_duration="P1Y", billing_plan="Annual", segment="Education", unit_price=200)
 		)
-		self.o_trial = _offer(
-			product_title="Prod B",
-			product_id="PB",
-			sku_title="Sku B",
-			sku_id="2",
-			term_duration="P1M",
-			billing_plan="None",
-			segment="Commercial",
-			unit_price=0,
-			tags="License;Trial",
-		)
-		# Inactiva y expirada (no deben aparecer).
-		_offer(
-			product_title="Prod Inact",
-			product_id="PI",
-			sku_title="Sku I",
-			sku_id="9",
-			term_duration="P1Y",
-			billing_plan="Annual",
-			segment="Commercial",
-			unit_price=50,
-			is_active=0,
-		)
-		_offer(
-			product_title="Prod Exp",
-			product_id="PE",
-			sku_title="Sku E",
-			sku_id="8",
-			term_duration="P1Y",
-			billing_plan="Annual",
-			segment="Commercial",
-			unit_price=50,
-			effective_start_date="2023-01-01",
-			effective_end_date="2024-01-01",
+		self.trial = upsert_item(
+			_row(
+				product_title="Prod B",
+				product_id="PB",
+				sku_title="Sku B",
+				sku_id="2",
+				term_duration="P1M",
+				billing_plan="None",
+				segment="Commercial",
+				unit_price=0,
+			)
 		)
 
 	def tearDown(self):
 		self._cleanup()
 
 	def _cleanup(self):
-		# add_license hace save() (que puede commitear), por lo que rollback no basta:
-		# limpieza explicita de quotations de prueba, ofertas e items materializados.
 		for qn in getattr(self, "_quotations", []):
 			if frappe.db.exists("Quotation", qn):
 				frappe.delete_doc("Quotation", qn, force=True, ignore_permissions=True)
-		for name in frappe.get_all("Item", filters={"ms_offer_key": ["is", "set"]}, pluck="name"):
+		for name in frappe.get_all("Item", filters={"item_group": ITEM_GROUP}, pluck="name"):
 			frappe.delete_doc("Item", name, force=True, ignore_permissions=True)
-		for name in frappe.get_all("Microsoft Offer", pluck="name"):
-			frappe.delete_doc("Microsoft Offer", name, force=True, ignore_permissions=True)
-		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- limpieza de test (add_license commitea)
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- limpieza de test
 
-	# --- resolucion progresiva ---
-	def test_first_step_prompts_product(self):
+	# --- selector sobre Item (sin Microsoft Offer) ---
+	def test_primer_paso_producto(self):
 		r = next_step({})
 		self.assertEqual(r["field"], "product_title")
-		vals = {o["value"] for o in r["options"]}
-		self.assertIn("Prod A", vals)
-		self.assertIn("Prod B", vals)
+		self.assertEqual({o["value"] for o in r["options"]}, {"Office 365 E3", "Prod B"})
 
-	def test_inactive_expired_excluded(self):
-		vals = {o["value"] for o in next_step({})["options"]}
-		self.assertNotIn("Prod Inact", vals)
-		self.assertNotIn("Prod Exp", vals)
-
-	def test_autoselect_chain_resolves(self):
-		r = next_step({"product_title": "Prod B"})
-		self.assertIn("resolved", r)
-		self.assertEqual(r["resolved"]["offer_key"], self.o_trial)
-		# se autoseleccionaron todas las dimensiones
-		for k in ("product_id", "sku_title", "sku_id", "term_duration", "billing_plan", "segment"):
-			self.assertTrue(r["selected"][k])
-
-	def test_chained_filter_prompts_billing(self):
-		r = next_step({"product_title": "Prod A"})
+	def test_prompt_billing_para_prod_a(self):
+		r = next_step({"product_title": "Office 365 E3"})
 		self.assertEqual(r["field"], "billing_plan")
 		self.assertEqual({o["value"] for o in r["options"]}, {"Annual", "Monthly"})
 
-	def test_resolve_after_billing(self):
-		r = next_step({"product_title": "Prod A", "billing_plan": "Monthly"})
+	def test_resuelve_tras_billing(self):
+		r = next_step({"product_title": "Office 365 E3", "billing_plan": "Monthly"})
 		self.assertIn("resolved", r)
-		self.assertEqual(r["resolved"]["offer_key"], self.o_monthly_com)
+		self.assertEqual(r["resolved"]["item"], self.a_monthly_com)
 
-	def test_prompt_segment_when_two(self):
-		r = next_step({"product_title": "Prod A", "billing_plan": "Annual"})
-		self.assertEqual(r["field"], "segment")
-		self.assertEqual({o["value"] for o in r["options"]}, {"Commercial", "Education"})
+	def test_resolve_path_cambia_anterior_descarta_dependientes(self):
+		r = resolve_path({"product_title": "Prod B", "billing_plan": "Monthly"})  # Monthly inválido en Prod B
+		self.assertIn("resolved", r)
+		self.assertEqual(r["resolved"]["item"], self.trial)
 
-	def test_invalid_combo_error(self):
-		r = next_step({"product_title": "Prod A", "segment": "Charity"})
-		self.assertIn("error", r)
+	def test_trial_labels(self):
+		r = resolve_path({"product_title": "Prod B"})
+		self.assertIn("resolved", r)
+		self.assertTrue(r["resolved"]["is_trial"])
+		self.assertEqual(r["resolved"]["compromiso"], "Prueba 1 mes")
+		self.assertEqual(r["resolved"]["facturacion"], "")
 
-	def test_selector_never_creates_item(self):
+	def test_selector_no_crea_item(self):
 		before = frappe.db.count("Item")
-		next_step({"product_title": "Prod A"})
-		next_step({"product_title": "Prod B"})
+		next_step({"product_title": "Office 365 E3"})
+		resolve_path({"product_title": "Prod B"})
 		self.assertEqual(frappe.db.count("Item"), before)
 
-	# --- pricing ---
-	def _od(self, **kw):
-		return dict({"item": "X", "sku_title": "S", "segment": "Commercial", "tags": None}, **kw)
+	def test_sin_dependencia_microsoft_offer(self):
+		# El selector resuelve consultando Item (no Microsoft Offer): funciona aunque el DocType
+		# viejo no esté presente en el código (los datos viejos se reconstruyen desde Excel).
+		r = resolve_path({"product_title": "Prod B"})
+		self.assertIn("resolved", r)
+		self.assertEqual(r["resolved"]["item"], self.trial)
 
-	def test_pricing_p1y_monthly(self):
-		s = price_summary(
-			self._od(term_duration="P1Y", billing_plan="Monthly", unit_price=120), qty=3, margin_pct=20
-		)
-		self.assertEqual(s["cost_unit"], 10.0)
-		self.assertEqual(s["price_unit"], 12.5)
-		self.assertEqual(s["amount"], 37.5)
+	def _legacy_item(self):
+		"""Item legacy/manual en el mismo Item Group pero SIN ms_product_id (no NCE)."""
+		doc = frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "LEGACY-NO-NCE-SEL",
+				"item_name": "Legacy no NCE (selector)",
+				"item_group": ITEM_GROUP,
+				"stock_uom": STOCK_UOM,
+				"is_stock_item": 0,
+			}
+		).insert(ignore_permissions=True)
+		return doc.name
 
-	def test_pricing_other_combo(self):
-		s = price_summary(
-			self._od(term_duration="P1Y", billing_plan="Annual", unit_price=120), qty=1, margin_pct=20
+	def test_selector_excluye_items_sin_ms_product_id(self):
+		# Mismo criterio NCE que el sync (_plan): el selector solo considera Items con ms_product_id set.
+		self._legacy_item()
+		# 1) el legacy NO aparece como opción de primer paso (no infla la lista de Producto)...
+		r = next_step({})
+		self.assertEqual(r["field"], "product_title")
+		values = {o["value"] for o in r["options"]}
+		self.assertEqual(values, {"Office 365 E3", "Prod B"})  # solo los NCE reales; sin opción en blanco
+		self.assertNotIn("", values)  # ms_product_title NULL del legacy no crea opción vacía
+		self.assertNotIn("Legacy no NCE (selector)", values)
+		# 2) ...y los Items NCE siguen resolviéndose igual (sin cambio de comportamiento).
+		self.assertEqual(
+			next_step({"product_title": "Office 365 E3", "billing_plan": "Monthly"})["resolved"]["item"],
+			self.a_monthly_com,
 		)
-		self.assertEqual(s["cost_unit"], 120.0)
-		self.assertEqual(s["price_unit"], 150.0)
+		self.assertEqual(resolve_path({"product_title": "Prod B"})["resolved"]["item"], self.trial)
 
-	def test_pricing_trial_zero(self):
-		s = price_summary(
-			self._od(term_duration="P1M", billing_plan="None", unit_price=0, tags="License;Trial"),
-			qty=5,
-			margin_pct=30,
+	def _shared_skuid_items(self):
+		"""Dos ofertas que comparten product_title+sku_title pero difieren en sku_id (NO visible) y term."""
+		a = upsert_item(
+			_row(
+				product_title="Prod C",
+				product_id="PC",
+				sku_title="Sku C",
+				sku_id="10",
+				term_duration="P1M",
+				billing_plan="Monthly",
+				segment="Commercial",
+				unit_price=50,
+			)
 		)
-		self.assertEqual(s["cost_unit"], 0.0)
+		b = upsert_item(
+			_row(
+				product_title="Prod C",
+				product_id="PC",
+				sku_title="Sku C",
+				sku_id="20",
+				term_duration="P1Y",
+				billing_plan="Annual",
+				segment="Commercial",
+				unit_price=120,
+			)
+		)
+		return a, b
+
+	def test_sku_id_ambiguo_no_congela_gui(self):
+		# Regresión (bloqueador GUI): un sku_title con >1 sku_id es una ambigüedad en una dimensión
+		# NO visible. El JS solo envía dimensiones VISIBLE (product_title/sku_title/term/billing/segment);
+		# resolve_path NO debe emitir un paso sku_id/product_id (el GUI no puede presentarlo) ni congelarse:
+		# difiere el disambiguador interno y pide una dimensión VISIBLE.
+		a, b = self._shared_skuid_items()
+		r = resolve_path({"product_title": "Prod C", "sku_title": "Sku C"})
+		self.assertNotIn("resolved", r)
+		self.assertNotIn("error", r)
+		fields = [s["field"] for s in r["steps"]]
+		self.assertNotIn("sku_id", fields)  # dimensión no-visible: nunca se expone como paso
+		self.assertNotIn("product_id", fields)
+		amb = [s for s in r["steps"] if s.get("ambiguous")]
+		self.assertTrue(amb and amb[0]["field"] == "term_duration")  # avanza a compromiso (visible)
+		# al elegir la dimensión visible, la oferta correcta resuelve (sku_id se fija solo)
+		r2 = resolve_path({"product_title": "Prod C", "sku_title": "Sku C", "term_duration": "P1Y"})
+		self.assertIn("resolved", r2)
+		self.assertEqual(r2["resolved"]["item"], b)
+		# y el camino P1M resuelve la otra oferta
+		r3 = resolve_path({"product_title": "Prod C", "sku_title": "Sku C", "term_duration": "P1M"})
+		self.assertEqual(r3["resolved"]["item"], a)
+
+	def test_next_step_difiere_dimension_no_visible_ambigua(self):
+		# next_step (API paralela) también difiere sku_id ambiguo y pide la dimensión visible.
+		self._shared_skuid_items()
+		r = next_step({"product_title": "Prod C", "sku_title": "Sku C"})
+		self.assertNotIn("resolved", r)
+		self.assertEqual(r.get("field"), "term_duration")  # no "sku_id"
+
+	# --- pricing bruto puro (costo como entrada; no recalcula /12) ---
+	def _summary(self, item, **kw):
+		base = {
+			"item": item,
+			"display": "X",
+			"sku_title": "S",
+			"compromiso": "c",
+			"facturacion": "f",
+			"is_trial": False,
+			"segment": "Commercial",
+		}
+		base.update(kw)
+		return base
+
+	def test_price_summary_margen_bruto(self):
+		s = price_summary(self._summary(self.a_monthly_com), cost=504, qty=2, margin_pct=20)
+		self.assertEqual(s["cost_unit"], 504.0)
+		self.assertEqual(s["price_unit"], 630.0)  # ROUNDUP(504/0.8,2)
+		self.assertEqual(s["amount"], 1260.0)
+
+	def test_price_summary_trial_cero(self):
+		s = price_summary(self._summary(self.trial, is_trial=True), cost=0, qty=5, margin_pct=20)
 		self.assertEqual(s["price_unit"], 0.0)
 		self.assertEqual(s["amount"], 0.0)
 
-	def test_pricing_roundup(self):
+	def test_roundup(self):
 		self.assertEqual(roundup2(11.7647), 11.77)
-		s = price_summary(
-			self._od(term_duration="P1Y", billing_plan="Annual", unit_price=10), qty=1, margin_pct=15
-		)
-		self.assertEqual(s["price_unit"], 11.77)
 
-	def test_pricing_invalid_margin_and_qty(self):
+	def test_price_summary_margen_invalido(self):
 		with self.assertRaises(QuoterError):
-			price_summary(
-				self._od(term_duration="P1Y", billing_plan="Annual", unit_price=10), qty=1, margin_pct=100
-			)
-		with self.assertRaises(QuoterError):
-			price_summary(
-				self._od(term_duration="P1Y", billing_plan="Annual", unit_price=10), qty=0, margin_pct=20
-			)
+			price_summary(self._summary(self.a_annual_com), cost=10, qty=1, margin_pct=100)
 
-	# --- alta en Quotation ---
+	# --- frontera de costo: delega en resolve_external_cost (resolver inyectado) ---
+	_PATCH = "acti_customs.acti_customizations.microsoft.quoter._get_resolver"
+
+	def test_resolve_cost_usd_a_usd(self):
+		with patch(self._PATCH, return_value=_fake_resolver(504.0, "buying_item_price", "USD")):
+			self.assertEqual(resolve_cost(self.a_monthly_com, "2026-09-26", "USD", "ACME"), 504.0)
+
+	def test_resolve_cost_usd_a_mxn(self):
+		# el resolver YA devuelve amount en la moneda objetivo (MXN); acti_customs solo lo consume
+		with patch(self._PATCH, return_value=_fake_resolver(8568.0, "buying_item_price", "MXN")):
+			self.assertEqual(resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME"), 8568.0)
+
+	def test_resolve_cost_sin_tipo_cambio_failclosed(self):
+		with patch(self._PATCH, return_value=_fake_resolver(None, "sin_tipo_cambio")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME")
+
+	def test_resolve_cost_ambiguo_failclosed(self):
+		with patch(self._PATCH, return_value=_fake_resolver(None, "ambiguo_price_list")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.a_monthly_com, "2026-09-26", "MXN", "ACME")
+
+	def test_resolve_cost_buying_item_price_cero_valido(self):
+		# Item Price real con rate 0 (p. ej. Trial) → el resolver lo devuelve como buying_item_price 0.
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "buying_item_price")):
+			self.assertEqual(resolve_cost(self.trial, "2026-09-26", "USD", "ACME"), 0.0)
+
+	def test_resolve_cost_sin_costo_failclosed(self):
+		# sin_costo = Item comprable SIN fuente de costo → error SIEMPRE (sin excepción Trial).
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.a_annual_com, "2026-09-26", "USD", "ACME")
+
+	def test_resolve_cost_sin_costo_failclosed_incluso_trial(self):
+		# Aun un Item Trial: si el resolver dice sin_costo (no hay Item Price), fail-closed (no workaround).
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "sin_costo")):
+			with self.assertRaises(QuoterError):
+				resolve_cost(self.trial, "2026-09-26", "USD", "ACME")
+
+	def test_resolve_cost_no_purchase_cero(self):
+		# no_purchase: el Item explícitamente no es comprable → 0 legítimo.
+		with patch(self._PATCH, return_value=_fake_resolver(0.0, "no_purchase")):
+			self.assertEqual(resolve_cost(self.a_annual_com, "2026-09-26", "USD", "ACME"), 0.0)
+
+	# --- cantidad entera (licencias Microsoft, sin fracciones) ---
+	def test_require_whole_qty_acepta_enteros(self):
+		for n in (1, 2, 10):
+			self.assertEqual(require_whole_qty(n), n)
+			self.assertEqual(require_whole_qty(float(n)), n)  # 2.0 == entero
+		self.assertIsInstance(require_whole_qty(3), int)
+
+	def test_require_whole_qty_rechaza_fraccion_y_cero(self):
+		for bad in (1.5, 0.1, 2.99, 3.5):
+			with self.assertRaises(QuoterError):
+				require_whole_qty(bad)
+		for bad in (0, -1):
+			with self.assertRaises(QuoterError):
+				require_whole_qty(bad)
+
+	def test_qty_3_5_nunca_se_convierte_en_3(self):
+		# 3.5 debe LANZAR, no devolver 3: prohibida la coerción/truncado silencioso (el bug del Int).
+		try:
+			result = require_whole_qty(3.5)
+		except QuoterError:
+			result = "raised"
+		self.assertEqual(result, "raised")
+		self.assertNotEqual(result, 3)
+
+	def test_add_to_quotation_end_to_end(self):
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		with patch(self._PATCH, return_value=_fake_resolver(504.0, "buying_item_price", q.currency)):
+			res = add_license_to_quotation(q.name, self.a_monthly_com, qty=2, margin_pct=20)
+		q.reload()
+		self.assertEqual(len(q.items), 1)
+		self.assertEqual(q.items[0].rate, 630.0)  # ROUNDUP(504/(1-0.20),2)
+		self.assertEqual(res["amount"], 1260.0)
+
+	def test_add_to_quotation_rechaza_fraccion(self):
+		# 'Agregar a cotización' con 3.5 licencias → QuoterError (guard antes de resolver costo).
+		# No se agrega NINGUNA línea: ni 3.5 ni un 3 truncado.
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		with self.assertRaises(QuoterError):
+			add_license_to_quotation(q.name, self.a_monthly_com, qty=3.5, margin_pct=20)
+		q.reload()
+		self.assertEqual(len(q.items), 0)
+		self.assertNotIn(3.0, [flt(i.qty) for i in q.items])  # jamás se coerciona a 3
+
+	def test_add_to_quotation_acepta_enteros_e2e(self):
+		# 'Agregar a cotización' sigue funcionando con 1, 2 y 10 (enteros). Items distintos por fila
+		# (ERPNext rechaza el mismo item repetido salvo Selling Setting específico).
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		casos = [(self.a_monthly_com, 1), (self.a_annual_com, 2), (self.a_annual_edu, 10)]
+		with patch(self._PATCH, return_value=_fake_resolver(100.0, "buying_item_price", q.currency)):
+			for item, n in casos:
+				res = add_license_to_quotation(q.name, item, qty=n, margin_pct=20)
+				self.assertEqual(res["qty"], n)
+		q.reload()
+		self.assertEqual(len(q.items), 3)
+		self.assertEqual({flt(i.qty) for i in q.items}, {1.0, 2.0, 10.0})
+
+	# --- required_items: item/qty/uom ---
+	def test_build_required_row_solo_item_qty_uom(self):
+		row = build_required_row(self.a_annual_com, 3)
+		self.assertEqual(set(row.keys()), {"item", "qty", "uom"})
+		self.assertEqual(row["item"], self.a_annual_com)
+		self.assertEqual(row["qty"], 3.0)
+
+	def test_add_as_cost_fail_closed_sin_required_items(self):
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		if q.meta.has_field("required_items"):
+			self.skipTest("Site con erpnext_proposals: se valida en vivo.")
+		with self.assertRaises(QuoterError):
+			add_license_as_cost(q.name, self.a_annual_com, qty=2)
+
 	def _quotation(self):
-		# Usa Company/Customer/Price List reales del site (no valores inventados). En un site sin
-		# setup wizard (p. ej. el site aislado de CI con ERPNext recién instalado) no existe
-		# infraestructura de venta; en ese caso las pruebas de Quotation se omiten (se validan en un
-		# site con ERPNext configurado / en vivo), en vez de fabricar una Company (cascada pesada).
-		company = frappe.db.get_value("Company", {"name": "_Test Company"}) or frappe.db.get_value(
-			"Company", {}
-		)
+		company = frappe.db.get_value("Company", {}, "name")
 		customer = frappe.db.get_value("Customer", {})
 		price_list = frappe.db.get_value("Price List", {"selling": 1}, "name")
 		if not (company and customer and price_list):
-			self.skipTest(
-				"Site sin infraestructura de venta (Company/Customer/Price List) — se valida en vivo."
-			)
+			return None
 		cur = frappe.db.get_value("Company", company, "default_currency")
 		q = frappe.get_doc(
 			{
@@ -272,10 +388,6 @@ class TestQuoter(FrappeTestCase):
 				"order_type": "Sales",
 			}
 		)
-		# ERPNext `calculate_taxes_and_totals` hace early-return con items vacíos y deja los
-		# totales en None; `set_total_in_words` (validate) haría abs(None) -> TypeError. El
-		# cotizador agrega la primera línea DESPUÉS de crear el draft, así que inicializamos
-		# los totales de un draft vacío a 0 (valor correcto para 0 líneas) para poder insertarlo.
 		for f in (
 			"total",
 			"base_total",
@@ -285,138 +397,7 @@ class TestQuoter(FrappeTestCase):
 			"base_rounded_total",
 		):
 			q.set(f, 0)
-		# La tabla `items` es mandatoria en Quotation; el draft de prueba se crea vacío a
-		# propósito (add_license_to_quotation agrega la primera y única línea), por eso se
-		# omite la validación de mandatorios solo al insertar el draft de prueba.
 		q.flags.ignore_mandatory = True
 		q.insert(ignore_permissions=True)
 		self._quotations.append(q.name)
 		return q
-
-	def test_add_license_appends_quotation_item(self):
-		q = self._quotation()
-		items_before = frappe.db.count("Item")
-		res = add_license_to_quotation(q.name, self.o_monthly_com, qty=2, margin_pct=20)
-		q.reload()
-		self.assertEqual(len(q.items), 1)
-		item_code = frappe.db.get_value("Microsoft Offer", self.o_monthly_com, "item")
-		self.assertEqual(q.items[0].item_code, item_code)
-		self.assertEqual(q.items[0].qty, 2)
-		self.assertEqual(q.items[0].rate, 12.5)
-		self.assertEqual(res["price_unit"], 12.5)
-		# el selector NO crea Items.
-		self.assertEqual(frappe.db.count("Item"), items_before)
-
-	def test_add_license_fail_closed_without_item(self):
-		# oferta sin Item materializado -> fail-closed
-		ok = _offer(
-			materialize=False,
-			product_title="Prod C",
-			product_id="PC",
-			sku_title="Sku C",
-			sku_id="3",
-			term_duration="P1Y",
-			billing_plan="Annual",
-			segment="Commercial",
-			unit_price=10,
-		)
-		q = self._quotation()
-		with self.assertRaises(QuoterError):
-			add_license_to_quotation(q.name, ok, qty=1, margin_pct=20)
-
-	# --- resolucion editable (resolve_path) ---
-	def test_resolve_path_first_step(self):
-		r = resolve_path({})
-		fields = {s["field"] for s in r["steps"]}
-		self.assertIn("product_title", fields)
-		vals = {o["value"] for s in r["steps"] if s["field"] == "product_title" for o in s["options"]}
-		self.assertEqual(vals, {"Prod A", "Prod B"})
-
-	def test_resolve_path_prompts_billing_for_prod_a(self):
-		r = resolve_path({"product_title": "Prod A"})
-		self.assertNotIn("resolved", r)
-		billing = next(s for s in r["steps"] if s["field"] == "billing_plan")
-		self.assertTrue(billing["ambiguous"])
-		self.assertEqual({o["value"] for o in billing["options"]}, {"Annual", "Monthly"})
-
-	def test_resolve_path_resolves_after_billing(self):
-		r = resolve_path({"product_title": "Prod A", "billing_plan": "Monthly"})
-		self.assertIn("resolved", r)
-		self.assertEqual(r["resolved"]["offer_key"], self.o_monthly_com)
-
-	def test_resolve_path_change_earlier_drops_dependents(self):
-		# Cambiar a Prod B con un billing_plan anterior invalido (Monthly) -> se descarta y resuelve trial.
-		r = resolve_path({"product_title": "Prod B", "billing_plan": "Monthly"})
-		self.assertIn("resolved", r)
-		self.assertEqual(r["resolved"]["offer_key"], self.o_trial)
-		self.assertEqual(r["selected"].get("billing_plan"), "None")
-
-	def test_resolve_path_trial_labels(self):
-		r = resolve_path({"product_title": "Prod B"})
-		self.assertIn("resolved", r)
-		self.assertTrue(r["resolved"]["is_trial"])
-		self.assertEqual(r["resolved"]["compromiso"], "Prueba 1 mes")
-		self.assertEqual(r["resolved"]["facturacion"], "")
-
-	# --- presentacion trial en el resumen de precio ---
-	def test_price_summary_trial_labels(self):
-		s = price_summary(
-			self._od(term_duration="P1M", billing_plan="None", unit_price=0, tags="License;Trial"),
-			qty=1,
-			margin_pct=20,
-		)
-		self.assertEqual(s["compromiso"], "Prueba 1 mes")
-		self.assertEqual(s["facturacion"], "")
-		self.assertTrue(s["is_trial"])
-
-	# --- Agregar como costo: fila required_items solo item/qty/uom ---
-	def test_build_required_row_only_item_qty_uom(self):
-		off = frappe.get_doc("Microsoft Offer", self.o_monthly_com)
-		row = build_required_row(off, 3)
-		self.assertEqual(set(row.keys()), {"item", "qty", "uom"})
-		self.assertEqual(row["item"], off.item)
-		self.assertEqual(row["qty"], 3.0)
-		self.assertEqual(row["uom"], frappe.db.get_value("Item", off.item, "stock_uom"))
-		# NO escribe costo/precio/margen ni metadata economica.
-		for forbidden in (
-			"frozen_cost_rate",
-			"frozen_cost_source",
-			"economic_behavior",
-			"rate",
-			"cost",
-			"margin_pct",
-		):
-			self.assertNotIn(forbidden, row)
-
-	def test_add_as_cost_never_creates_item(self):
-		before = frappe.db.count("Item")
-		build_required_row(frappe.get_doc("Microsoft Offer", self.o_annual_com), 2)
-		self.assertEqual(frappe.db.count("Item"), before)
-
-	def test_add_as_cost_fail_closed_without_required_items_field(self):
-		# En un site SIN erpnext_proposals, Quotation no tiene la tabla required_items -> fail-closed.
-		q = self._quotation()
-		if q.meta.has_field("required_items"):
-			self.skipTest("Site con erpnext_proposals: la tabla required_items existe (se valida en vivo).")
-		with self.assertRaises(QuoterError):
-			add_license_as_cost(q.name, self.o_monthly_com, qty=2)
-
-	# --- destinos MUTUAMENTE EXCLUYENTES (o items, o required_items; nunca ambos) ---
-	def test_sale_adds_only_quotation_item(self):
-		q = self._quotation()
-		req_before = len(q.get("required_items") or [])
-		add_license_to_quotation(q.name, self.o_annual_com, qty=1, margin_pct=20)
-		q.reload()
-		self.assertEqual(len(q.items), 1)  # exactamente una linea de venta
-		self.assertEqual(len(q.get("required_items") or []), req_before)  # required_items intacta
-
-	def test_cost_adds_only_required_item(self):
-		q = self._quotation()
-		if not q.meta.has_field("required_items"):
-			self.skipTest("Site sin erpnext_proposals: la exclusion en 'costo' se valida en vivo.")
-		items_before = len(q.items)
-		req_before = len(q.get("required_items") or [])
-		add_license_as_cost(q.name, self.o_annual_com, qty=3)
-		q.reload()
-		self.assertEqual(len(q.get("required_items") or []), req_before + 1)  # exactamente una fila de costo
-		self.assertEqual(len(q.items), items_before)  # items sin cambios

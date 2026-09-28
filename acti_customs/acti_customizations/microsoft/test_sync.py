@@ -1,10 +1,11 @@
 # Copyright (c) 2025, Consultoria en Negocios y Aplicaciones and contributors
 # For license information, please see license.txt
 
-"""Tests del sincronizador de catalogo Microsoft.
+"""Tests del sincronizador nativo Excel -> Item + Item Price + Item Default (ADR-0003).
 
-Module test (fuera de doctype/) para no disparar generacion de test-records de Item.
-Genera archivos .xlsx temporales; no depende del Excel real del cliente.
+Module test. Genera .xlsx temporales con las columnas reales del catálogo NCE (incluida ERP Price,
+para verificar que se IGNORA). Las pruebas de `apply` requieren una Company en el site (Item Default);
+en un site pelón (CI sin setup wizard) se omiten y el pipeline se valida en un site configurado.
 """
 
 import os
@@ -16,221 +17,220 @@ from frappe.tests.utils import FrappeTestCase
 
 from acti_customs.acti_customizations.microsoft.catalog import SHEET, CatalogError
 from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM
-from acti_customs.acti_customizations.microsoft.sync import sync_microsoft_catalog
+from acti_customs.acti_customizations.microsoft.pricing import PRICE_LIST
+from acti_customs.acti_customizations.microsoft.sync import resolve_company, sync_microsoft_catalog
+from acti_customs.acti_customizations.microsoft.test_materializer import _prereqs
 
 COLUMNS = [
+	"ChangeIndicator",
 	"ProductTitle",
 	"ProductId",
 	"SkuId",
 	"SkuTitle",
+	"Publisher",
+	"SkuDescription",
+	"UnitOfMeasure",
 	"TermDuration",
 	"BillingPlan",
-	"Segment",
 	"Market",
 	"Currency",
 	"UnitPrice",
 	"EffectiveStartDate",
 	"EffectiveEndDate",
 	"Tags",
-	"ChangeIndicator",
+	"ERP Price",
+	"Segment",
 ]
-
 ROW_A = {
-	"ProductTitle": "Prod A",
-	"ProductId": "CFQ7X1",
-	"SkuId": "S1",
+	"ProductTitle": "Office 365 E3",
+	"ProductId": "PA",
+	"SkuId": "1",
 	"SkuTitle": "Sku A",
 	"TermDuration": "P1Y",
-	"BillingPlan": "Annual",
-	"Segment": "Commercial",
+	"BillingPlan": "Monthly",
 	"Market": "MX",
 	"Currency": "USD",
-	"UnitPrice": 10.0,
+	"UnitPrice": 120,
 	"EffectiveStartDate": "2026-01-01",
 	"EffectiveEndDate": "9999-11-30",
-	"Tags": "",
-	"ChangeIndicator": "New",
+	"Tags": "License",
+	"ERP Price": 999.99,
+	"Segment": "Commercial",
 }
 ROW_B = {
-	"ProductTitle": "Prod B",
-	"ProductId": "CFQ7X2",
-	"SkuId": "S2",
+	"ProductTitle": "Office 365 E5",
+	"ProductId": "PB",
+	"SkuId": "2",
 	"SkuTitle": "Sku B",
-	"TermDuration": "P1M",
-	"BillingPlan": "Monthly",
-	"Segment": "Education",
+	"TermDuration": "P1Y",
+	"BillingPlan": "Annual",
 	"Market": "MX",
 	"Currency": "USD",
-	"UnitPrice": 20.0,
+	"UnitPrice": 200,
 	"EffectiveStartDate": "2026-01-01",
 	"EffectiveEndDate": "9999-11-30",
-	"Tags": "",
-	"ChangeIndicator": "New",
+	"Tags": "License",
+	"ERP Price": 888.88,
+	"Segment": "Education",
 }
-KEY_A = "CFQ7X1|S1|P1Y|Annual|Commercial"
-CODE_A = "MS-CFQ7X1-S1-P1Y-Annual-Commercial"
-
-
-def _ensure_prereqs():
-	if not frappe.db.exists("UOM", STOCK_UOM):
-		frappe.get_doc({"doctype": "UOM", "uom_name": STOCK_UOM}).insert(ignore_permissions=True)
-	if not frappe.db.exists("Item Group", ITEM_GROUP):
-		# El site de CI (erpnext sin setup wizard) puede no tener la raíz "All Item Groups".
-		parent = frappe.db.get_value("Item Group", {"is_group": 1}, "name")
-		if not parent:
-			root = frappe.get_doc(
-				{"doctype": "Item Group", "item_group_name": "All Item Groups", "is_group": 1}
-			)
-			root.insert(ignore_permissions=True)
-			parent = root.name
-		frappe.get_doc(
-			{
-				"doctype": "Item Group",
-				"item_group_name": ITEM_GROUP,
-				"parent_item_group": parent,
-				"is_group": 0,
-			}
-		).insert(ignore_permissions=True)
+CODE_A = "MS-PA-1-P1Y-Monthly-Commercial"
+CODE_B = "MS-PB-2-P1Y-Annual-Education"
 
 
 class TestSync(FrappeTestCase):
 	def setUp(self):
-		self._cleanup()
-		_ensure_prereqs()
 		self._tmp = []
+		self._cleanup()
+		_prereqs()
+		self._company = frappe.db.get_value("Company", {}, "name")
+		self._has_company = bool(self._company)
 
 	def tearDown(self):
-		for p in getattr(self, "_tmp", []):
+		for p in self._tmp:
 			if os.path.exists(p):
 				os.remove(p)
 		self._cleanup()
 
 	def _cleanup(self):
-		# El sync hace commit() (necesario para la carga real de 3,932), por lo que rollback
-		# no basta para aislar los tests: limpiamos explicitamente Offers/Items materializados.
-		for name in frappe.get_all("Item", filters={"ms_offer_key": ["is", "set"]}, pluck="name"):
+		for name in frappe.get_all("Item Price", filters={"price_list": PRICE_LIST}, pluck="name"):
+			frappe.delete_doc("Item Price", name, force=True, ignore_permissions=True)
+		for name in frappe.get_all("Item", filters={"item_group": ITEM_GROUP}, pluck="name"):
 			frappe.delete_doc("Item", name, force=True, ignore_permissions=True)
-		for name in frappe.get_all("Microsoft Offer", pluck="name"):
-			frappe.delete_doc("Microsoft Offer", name, force=True, ignore_permissions=True)
-		if frappe.db.exists("Item", "MS-CFQ7X1-1"):
-			frappe.delete_doc("Item", "MS-CFQ7X1-1", force=True, ignore_permissions=True)
-		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- limpieza de test (el sync commitea)
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit -- limpieza de test
 
-	def _xlsx(self, rows, columns=COLUMNS, sheet=SHEET):
+	def _xlsx(self, rows):
 		fd, path = tempfile.mkstemp(suffix=".xlsx")
 		os.close(fd)
 		self._tmp.append(path)
 		wb = openpyxl.Workbook()
 		ws = wb.active
-		ws.title = sheet
-		ws.append(columns)
+		ws.title = SHEET
+		ws.append(COLUMNS)
 		for r in rows:
-			ws.append([r.get(c, "") for c in columns])
+			ws.append([r.get(c, "") for c in COLUMNS])
 		wb.save(path)
 		return path
 
-	# --- estructura ---
-	def test_missing_columns_fail_closed(self):
-		path = self._xlsx([ROW_A], columns=[c for c in COLUMNS if c != "ProductId"])
-		with self.assertRaises(CatalogError):
-			sync_microsoft_catalog(path, dry_run=True)
+	def _apply(self, rows):
+		return sync_microsoft_catalog(self._xlsx(rows), dry_run=False, company=self._company)
 
-	def test_wrong_sheet_fail_closed(self):
-		path = self._xlsx([ROW_A], sheet="OtraHoja")
-		with self.assertRaises(CatalogError):
-			sync_microsoft_catalog(path, dry_run=True)
-
-	# --- dry run no escribe ---
-	def test_dry_run_no_write(self):
-		path = self._xlsx([ROW_A, ROW_B])
-		rep = sync_microsoft_catalog(path, dry_run=True)
-		self.assertEqual(rep["rows_read"], 2)
-		self.assertEqual(rep["rows_valid"], 2)
-		self.assertEqual(rep["offers_new"], 2)
-		self.assertEqual(rep["items_to_create"], 2)
-		self.assertNotIn("applied", rep)
-		self.assertEqual(frappe.db.count("Microsoft Offer"), 0)
-		self.assertEqual(frappe.db.count("Item", {"ms_offer_key": ["is", "set"]}), 0)
-
-	# --- creacion inicial ---
-	def test_initial_apply_creates(self):
-		path = self._xlsx([ROW_A, ROW_B])
-		rep = sync_microsoft_catalog(path, dry_run=False)
-		self.assertEqual(rep["applied"]["offers_created"], 2)
-		self.assertEqual(rep["applied"]["items_created"], 2)
-		self.assertEqual(frappe.db.count("Microsoft Offer"), 2)
-		self.assertEqual(frappe.db.count("Item", {"ms_offer_key": ["is", "set"]}), 2)
-		self.assertEqual(frappe.db.get_value("Microsoft Offer", KEY_A, "item"), CODE_A)
-
-	# --- idempotencia ---
-	def test_idempotent_second_apply(self):
-		path = self._xlsx([ROW_A, ROW_B])
-		sync_microsoft_catalog(path, dry_run=False)
-		rep2 = sync_microsoft_catalog(path, dry_run=False)
-		self.assertEqual(rep2["offers_new"], 0)
-		self.assertEqual(rep2["items_to_create"], 0)
-		self.assertEqual(rep2["offers_to_update"], 0)
-		self.assertEqual(rep2["applied"]["offers_created"], 0)
-		self.assertEqual(rep2["applied"]["items_created"], 0)
-		self.assertEqual(frappe.db.count("Item", {"ms_offer_key": ["is", "set"]}), 2)
-
-	# --- actualizacion de precio: sin nuevo Item ---
-	def test_price_update_no_new_item(self):
-		path = self._xlsx([ROW_A])
-		sync_microsoft_catalog(path, dry_run=False)
-		path2 = self._xlsx([dict(ROW_A, UnitPrice=99.5)])
-		rep = sync_microsoft_catalog(path2, dry_run=False)
-		self.assertEqual(rep["offers_to_update"], 1)
-		self.assertEqual(rep["applied"]["offers_updated"], 1)
-		self.assertEqual(rep["applied"]["items_created"], 0)
-		self.assertEqual(frappe.db.get_value("Microsoft Offer", KEY_A, "unit_price"), 99.5)
-		self.assertEqual(frappe.db.count("Item", {"ms_offer_key": ["is", "set"]}), 1)
-
-	# --- actualizacion de titulo (metadata no identitaria): sin nuevo Item ---
-	def test_title_update_no_new_item(self):
-		path = self._xlsx([ROW_A])
-		sync_microsoft_catalog(path, dry_run=False)
-		path2 = self._xlsx([dict(ROW_A, ProductTitle="Prod A v2", SkuTitle="Sku A v2")])
-		rep = sync_microsoft_catalog(path2, dry_run=False)
-		self.assertEqual(rep["applied"]["offers_updated"], 1)
-		self.assertEqual(rep["applied"]["items_created"], 0)
-		self.assertEqual(frappe.db.get_value("Microsoft Offer", KEY_A, "product_title"), "Prod A v2")
-		self.assertEqual(frappe.db.count("Item", {"ms_offer_key": ["is", "set"]}), 1)
-
-	# --- nueva oferta -> nuevo item ---
-	def test_new_offer_creates_item(self):
-		sync_microsoft_catalog(self._xlsx([ROW_A]), dry_run=False)
-		rep = sync_microsoft_catalog(self._xlsx([ROW_A, ROW_B]), dry_run=False)
-		self.assertEqual(rep["offers_new"], 1)
-		self.assertEqual(rep["applied"]["offers_created"], 1)
-		self.assertEqual(rep["applied"]["items_created"], 1)
-		self.assertEqual(frappe.db.count("Item", {"ms_offer_key": ["is", "set"]}), 2)
-
-	# --- oferta desaparecida -> inactivar, conservar item ---
-	def test_disappeared_offer_inactivated(self):
-		sync_microsoft_catalog(self._xlsx([ROW_A, ROW_B]), dry_run=False)
-		rep = sync_microsoft_catalog(self._xlsx([ROW_A]), dry_run=False)  # falta B
-		self.assertEqual(rep["offers_to_inactivate"], 1)
-		self.assertEqual(rep["applied"]["offers_inactivated"], 1)
-		self.assertEqual(
-			frappe.db.get_value("Microsoft Offer", "CFQ7X2|S2|P1M|Monthly|Education", "is_active"), 0
+	def _price(self, code):
+		rows = frappe.get_all(
+			"Item Price",
+			filters={"item_code": code, "price_list": PRICE_LIST},
+			fields=["price_list_rate", "valid_from", "valid_upto"],
+			order_by="valid_from asc",
 		)
-		# Item de B se conserva.
-		self.assertTrue(frappe.db.exists("Item", "MS-CFQ7X2-S2-P1M-Monthly-Education"))
+		return rows
 
-	# --- legacy no se reutiliza ---
-	def test_legacy_item_not_reused(self):
-		legacy = frappe.get_doc(
+	# --- dry run (no requiere Company) ---
+	def test_dry_run_no_escribe(self):
+		rep = sync_microsoft_catalog(self._xlsx([ROW_A, ROW_B]), dry_run=True)
+		self.assertEqual(rep["rows_valid"], 2)
+		self.assertEqual(rep["items_new"], 2)
+		self.assertNotIn("applied", rep)
+		self.assertEqual(frappe.db.count("Item", {"item_group": ITEM_GROUP}), 0)
+
+	# --- apply (requiere Company) ---
+	def test_apply_crea_item_price_itemdefault(self):
+		if not self._has_company:
+			self.skipTest("Site sin Company; apply se valida en site configurado.")
+		self._apply([ROW_A, ROW_B])
+		self.assertTrue(frappe.db.exists("Item", CODE_A))
+		self.assertTrue(frappe.db.exists("Item", CODE_B))
+		# /12: P1Y+Monthly -> 120/12 = 10 ; P1Y+Annual -> 200
+		self.assertEqual(self._price(CODE_A)[0].price_list_rate, 10.0)
+		self.assertEqual(self._price(CODE_B)[0].price_list_rate, 200.0)
+		# Item Default apunta a la Price List Microsoft
+		company = frappe.db.get_value("Company", {}, "name")
+		it = frappe.get_doc("Item", CODE_A)
+		self.assertTrue(
+			any(d.company == company and d.default_price_list == PRICE_LIST for d in it.item_defaults)
+		)
+
+	def test_erp_price_ignorado_y_unitprice_no_paralelo(self):
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A])
+		# el costo persistido es el /12 (10), NO ERP Price (999.99) NI UnitPrice crudo (120)
+		self.assertEqual(self._price(CODE_A)[0].price_list_rate, 10.0)
+		it = frappe.get_doc("Item", CODE_A)
+		# no hay campo económico paralelo en el Item (ms_currency/ms_offer_label eliminados)
+		self.assertFalse(it.get("ms_currency"))
+		self.assertNotIn(999.99, [self._price(CODE_A)[0].price_list_rate])
+
+	def test_idempotente(self):
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A, ROW_B])
+		self._apply([ROW_A, ROW_B])
+		self.assertEqual(frappe.db.count("Item", {"item_group": ITEM_GROUP}), 2)
+		self.assertEqual(frappe.db.count("Item Price", {"item_code": CODE_A, "price_list": PRICE_LIST}), 1)
+
+	def test_desaparecida_disable_y_cierra_precio(self):
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A, ROW_B])
+		self._apply([ROW_A])  # falta B
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 1)
+		# su Item Price abierto se cerró (valid_upto no vacío) — conservado, no borrado
+		self.assertTrue(frappe.db.exists("Item Price", {"item_code": CODE_B, "price_list": PRICE_LIST}))
+		self.assertTrue(self._price(CODE_B)[0].valid_upto)
+
+	def test_reactivacion(self):
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A, ROW_B])
+		self._apply([ROW_A])  # B desaparece -> disabled
+		self._apply([ROW_A, ROW_B])  # B reaparece
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 0)
+
+	# --- selección de Company (pura, determinista) ---
+	def test_resolve_company_una(self):
+		self.assertEqual(resolve_company(None, ["ACME"]), "ACME")
+
+	def test_resolve_company_multiples_con_explicita(self):
+		self.assertEqual(resolve_company("B", ["A", "B", "C"]), "B")
+
+	def test_resolve_company_multiples_sin_explicita_failclosed(self):
+		with self.assertRaises(CatalogError):
+			resolve_company(None, ["A", "B"])
+
+	def test_resolve_company_explicita_inexistente_failclosed(self):
+		with self.assertRaises(CatalogError):
+			resolve_company("X", ["A", "B"])
+
+	def test_resolve_company_cero_failclosed(self):
+		with self.assertRaises(CatalogError):
+			resolve_company(None, [])
+
+	def test_item_default_solo_company_objetivo(self):
+		companies = frappe.get_all("Company", pluck="name")
+		if len(companies) < 2:
+			self.skipTest("Se requieren >=2 Companies para verificar aislamiento del Item Default.")
+		self._apply([ROW_A])  # usa self._company como objetivo
+		other = next(c for c in companies if c != self._company)
+		it = frappe.get_doc("Item", CODE_A)
+		self.assertTrue(
+			any(d.company == self._company and d.default_price_list == PRICE_LIST for d in it.item_defaults)
+		)
+		# NO se tocaron defaults de otra Company
+		self.assertFalse(any(d.company == other for d in it.item_defaults))
+
+	def test_item_legacy_no_gestionado_no_se_desactiva(self):
+		# Item legacy en el mismo Item Group pero SIN ms_product_id (no NCE) no debe ser tocado por el sync.
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		frappe.get_doc(
 			{
 				"doctype": "Item",
-				"item_code": "MS-CFQ7X1-1",
-				"item_name": "Legacy coarse",
+				"item_code": "LEGACY-NO-NCE-001",
+				"item_name": "Legacy no NCE",
 				"item_group": ITEM_GROUP,
 				"stock_uom": STOCK_UOM,
 				"is_stock_item": 0,
 			}
 		).insert(ignore_permissions=True)
-		sync_microsoft_catalog(self._xlsx([ROW_A]), dry_run=False)
-		self.assertTrue(frappe.db.exists("Item", CODE_A))
-		self.assertNotEqual(CODE_A, legacy.name)
-		self.assertFalse(frappe.db.get_value("Item", legacy.name, "ms_offer_key"))
+		rep = self._apply([ROW_A])  # el legacy NO está en el Excel
+		self.assertEqual(rep["items_to_disable"], 0)  # el legacy no cuenta como "desaparecido"
+		self.assertEqual(frappe.db.get_value("Item", "LEGACY-NO-NCE-001", "disabled"), 0)  # intacto

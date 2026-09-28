@@ -12,37 +12,12 @@
  },
  {
   "doctype": "Custom Field",
-  "name": "Item-ms_offer",
-  "dt": "Item",
-  "fieldname": "ms_offer",
-  "label": "Microsoft Offer",
-  "fieldtype": "Link",
-  "options": "Microsoft Offer",
-  "insert_after": "ms_microsoft_section",
-  "read_only": 1,
-  "module": "ACTI Customizations"
- },
- {
-  "doctype": "Custom Field",
-  "name": "Item-ms_offer_key",
-  "dt": "Item",
-  "fieldname": "ms_offer_key",
-  "label": "Offer Key",
-  "fieldtype": "Data",
-  "insert_after": "ms_offer",
-  "read_only": 1,
-  "search_index": 1,
-  "description": "Clave tecnica de la oferta Microsoft (ProductId|SkuId|TermDuration|BillingPlan|Segment).",
-  "module": "ACTI Customizations"
- },
- {
-  "doctype": "Custom Field",
   "name": "Item-ms_product_id",
   "dt": "Item",
   "fieldname": "ms_product_id",
   "label": "MS Product Id",
   "fieldtype": "Data",
-  "insert_after": "ms_offer_key",
+  "insert_after": "ms_microsoft_section",
   "read_only": 1,
   "in_standard_filter": 1,
   "module": "ACTI Customizations"
@@ -121,40 +96,6 @@
   "fieldtype": "Data",
   "insert_after": "ms_product_title",
   "read_only": 1,
-  "module": "ACTI Customizations"
- },
- {
-  "doctype": "Custom Field",
-  "name": "Item-ms_market",
-  "dt": "Item",
-  "fieldname": "ms_market",
-  "label": "MS Market",
-  "fieldtype": "Data",
-  "insert_after": "ms_sku_title",
-  "read_only": 1,
-  "module": "ACTI Customizations"
- },
- {
-  "doctype": "Custom Field",
-  "name": "Item-ms_currency",
-  "dt": "Item",
-  "fieldname": "ms_currency",
-  "label": "MS Currency",
-  "fieldtype": "Data",
-  "insert_after": "ms_market",
-  "read_only": 1,
-  "module": "ACTI Customizations"
- },
- {
-  "doctype": "Custom Field",
-  "name": "Item-ms_offer_label",
-  "dt": "Item",
-  "fieldname": "ms_offer_label",
-  "label": "MS Offer Label",
-  "fieldtype": "Small Text",
-  "insert_after": "ms_currency",
-  "read_only": 1,
-  "description": "Etiqueta comercial completa (sin truncar): ProductTitle | ProductId | SkuTitle | TermDuration | BillingPlan | Segment. Fuente para mostrar en el selector/cotizador. item_name estandar (<=140) es solo una representacion legible.",
   "module": "ACTI Customizations"
  }
 ]
