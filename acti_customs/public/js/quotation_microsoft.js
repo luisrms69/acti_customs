@@ -275,7 +275,7 @@ const DRAFT_WORKFLOW_STATE = "Borrador";
 
 frappe.ui.form.on("Quotation", {
 	refresh(frm) {
-		const is_draft = frm.doc.docstatus === 0 && !frm.is_new();
+		const is_draft = frm.doc.docstatus === 0;
 		const ws = frm.doc.workflow_state;
 		const in_borrador = !ws || ws === DRAFT_WORKFLOW_STATE;
 		if (is_draft && in_borrador) {
