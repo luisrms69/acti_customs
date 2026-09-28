@@ -34,6 +34,7 @@ acti_customs.ms.open_dialog = function (frm) {
 		"btn_cost",
 	];
 	const cur = frm.doc.currency;
+	const is_new = frm.is_new(); // Quotation sin persistir: preview con contexto del form + alta nativa del 1er item
 	let selected = {};
 	let resolved = null;
 
@@ -101,6 +102,9 @@ acti_customs.ms.open_dialog = function (frm) {
 	// oferta exacta, todo esto permanece oculto.
 	const show_detail = (on) => {
 		DETAIL_FIELDS.forEach((fn) => d.set_df_property(fn, "hidden", on ? 0 : 1));
+		// "Agregar como costo" (required_items) queda FUERA DE ALCANCE en Quotation nueva por ahora:
+		// se oculta. En Quotation existente se muestra igual que en v0.3.0.
+		if (on && is_new) d.set_df_property("btn_cost", "hidden", 1);
 		if (!on) d.fields_dict.preview.$wrapper.empty();
 	};
 
@@ -139,7 +143,11 @@ acti_customs.ms.open_dialog = function (frm) {
 					offer_key: resolved.offer_key,
 					qty: d.get_value("qty"),
 					margin_pct: d.get_value("margin_pct"),
+					// Persistida → el backend usa la BD; nueva/sin guardar → usa este contexto del formulario.
 					quotation: frm.doc.name,
+					company: frm.doc.company,
+					currency: frm.doc.currency,
+					transaction_date: frm.doc.transaction_date,
 				},
 			})
 			.then((r) => {
@@ -220,25 +228,101 @@ acti_customs.ms.open_dialog = function (frm) {
 			return;
 		}
 		const qty = d.get_value("qty");
-		const common = { quotation: frm.doc.name, offer_key: resolved.offer_key, qty: qty };
-		let method, args, msg_ok;
+		const offer_key = resolved.offer_key;
+		const M = "acti_customs.acti_customizations.microsoft.quoter.";
+
+		// "Agregar como costo": v0.3.0 en Quotation existente; FUERA DE ALCANCE (oculto) en Quotation nueva.
 		if (destino === "cost") {
-			method = "acti_customs.acti_customizations.microsoft.quoter.add_license_as_cost";
-			args = common;
-			msg_ok = __("Agregado como costo: {0}", [resolved.display]);
-		} else {
-			method = "acti_customs.acti_customizations.microsoft.quoter.add_license_to_quotation";
-			args = Object.assign({ margin_pct: d.get_value("margin_pct") }, common);
-			msg_ok = __("Agregado a cotización: {0}", [resolved.display]);
+			if (is_new) return; // botón oculto en nueva; guard defensivo
+			frappe
+				.call({
+					method: M + "add_license_as_cost",
+					args: { quotation: frm.doc.name, offer_key, qty },
+					freeze: true,
+					freeze_message: __("Agregando..."),
+				})
+				.then((r) => {
+					if (r.message) {
+						d.hide();
+						frappe.show_alert({
+							message: __("Agregado como costo: {0}", [resolved.display]),
+							indicator: "green",
+						});
+						frm.reload_doc();
+					}
+				});
+			return;
 		}
+
+		// "Agregar a cotización" en Quotation EXISTENTE: v0.3.0 intacto (server-side, guarda y recarga).
+		if (!is_new) {
+			frappe
+				.call({
+					method: M + "add_license_to_quotation",
+					args: {
+						quotation: frm.doc.name,
+						offer_key,
+						qty,
+						margin_pct: d.get_value("margin_pct"),
+					},
+					freeze: true,
+					freeze_message: __("Agregando..."),
+				})
+				.then((r) => {
+					if (r.message) {
+						d.hide();
+						frappe.show_alert({
+							message: __("Agregado a cotización: {0}", [resolved.display]),
+							indicator: "green",
+						});
+						frm.reload_doc();
+					}
+				});
+			return;
+		}
+
+		// "Agregar a cotización" en Quotation NUEVA (sin persistir): alta NATIVA del primer item.
+		// (a) rate lo calcula el MISMO preview con el contexto del formulario (no se duplica economía).
 		frappe
-			.call({ method, args, freeze: true, freeze_message: __("Agregando...") })
+			.call({
+				method: M + "get_price_preview",
+				args: {
+					offer_key,
+					qty,
+					margin_pct: d.get_value("margin_pct"),
+					company: frm.doc.company,
+					currency: frm.doc.currency,
+					transaction_date: frm.doc.transaction_date,
+				},
+			})
 			.then((r) => {
-				if (r.message) {
-					d.hide();
-					frappe.show_alert({ message: msg_ok, indicator: "green" });
-					frm.reload_doc();
+				const s = r.message;
+				if (!s) return;
+				// (b) REUTILIZAR la fila vacía inicial que el grid auto-agrega en un doc nuevo, en vez de
+				//     crear una segunda. Criterio ESTRICTO de "fila vacía inicial" (confirmado en runtime):
+				//     __islocal && sin item_code && qty 0 && rate 0. NUNCA reutiliza una fila con item_code
+				//     ni con qty/rate ya capturados. Si no hay ninguna que cumpla EXACTAMENTE, add_child.
+				//     (c) trigger NATIVO item_code y ESPERAR: get_item_details completa item_name/description/
+				//     UOM/conversion/cuentas/price list/impuestos. (e) DESPUÉS qty y rate (el rate manual
+				//     sobrevive al price_list_rate). (f) recalc nativo vía set_value + refresh. (g) sin guardar.
+				let row = (frm.doc.items || []).find(
+					(it) => it.__islocal && !it.item_code && !flt(it.qty) && !flt(it.rate)
+				);
+				if (row) {
+					row.item_code = s.item; // fila vacía inicial reutilizada
+				} else {
+					row = frm.add_child("items", { item_code: s.item });
 				}
+				frm.script_manager.trigger("item_code", row.doctype, row.name).then(() => {
+					frappe.model.set_value(row.doctype, row.name, "qty", s.qty);
+					frappe.model.set_value(row.doctype, row.name, "rate", s.price_unit);
+					frm.refresh_field("items");
+					d.hide();
+					frappe.show_alert({
+						message: __("Agregado a cotización: {0}", [resolved.display]),
+						indicator: "green",
+					});
+				});
 			});
 	}
 
@@ -275,7 +359,7 @@ const DRAFT_WORKFLOW_STATE = "Borrador";
 
 frappe.ui.form.on("Quotation", {
 	refresh(frm) {
-		const is_draft = frm.doc.docstatus === 0 && !frm.is_new();
+		const is_draft = frm.doc.docstatus === 0;
 		const ws = frm.doc.workflow_state;
 		const in_borrador = !ws || ws === DRAFT_WORKFLOW_STATE;
 		if (is_draft && in_borrador) {

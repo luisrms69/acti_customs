@@ -369,14 +369,39 @@ def get_selection_path(selected: str | None = None):
 	return resolve_path(selected or {})
 
 
+def _pricing_context(quotation=None, company=None, currency=None, transaction_date=None):
+	"""(company, currency, transaction_date) para resolver el costo del preview.
+
+	- Quotation PERSISTIDA (existe en BD) → se deriva de la BD (comportamiento v0.3.0, back-compat).
+	- Quotation NUEVA/sin guardar (no existe en BD) → se usa el contexto EXPLÍCITO del formulario.
+	Fail-closed: si falta cualquiera de los tres, error (nunca se degrada el costo por contexto ausente).
+	"""
+	if quotation and frappe.db.exists("Quotation", quotation):
+		q = frappe.db.get_value(
+			"Quotation", quotation, ["company", "currency", "transaction_date"], as_dict=True
+		)
+		company, currency, transaction_date = q.company, q.currency, q.transaction_date
+	if not (company and currency and transaction_date):
+		raise QuoterError("Falta contexto (company, currency y transaction_date) para resolver el costo.")
+	return company, currency, transaction_date
+
+
 @frappe.whitelist()
-def get_price_preview(offer_key: str, qty: float, margin_pct: float, quotation: str | None = None):
-	"""Preview de precio. Requiere contexto de Quotation (moneda/fecha) para resolver el costo (FX)."""
+def get_price_preview(
+	offer_key: str,
+	qty: float,
+	margin_pct: float,
+	quotation: str | None = None,
+	company: str | None = None,
+	currency: str | None = None,
+	transaction_date: str | None = None,
+):
+	"""Preview de precio. Deriva el contexto (moneda/fecha/company) de la Quotation PERSISTIDA o, si es
+	NUEVA/sin guardar, del contexto EXPLÍCITO del formulario. Fail-closed si falta contexto. Sigue
+	llamando exactamente a resolve_cost + price_summary (misma y única lógica económica)."""
 	item_code = _load_valid_item(offer_key)
-	if not quotation:
-		raise QuoterError("Falta el contexto de Quotation para resolver el costo (moneda/fecha).")
-	q = frappe.db.get_value("Quotation", quotation, ["currency", "transaction_date", "company"], as_dict=True)
-	cost = resolve_cost(item_code, q.transaction_date, q.currency, q.company)
+	company, currency, transaction_date = _pricing_context(quotation, company, currency, transaction_date)
+	cost = resolve_cost(item_code, transaction_date, currency, company)
 	return price_summary(_summary_for(item_code), cost, qty, margin_pct)
 
 
