@@ -15,6 +15,8 @@ acti_customs CONSUME catálogos fiscales (UOM/Item Group); no los crea. El `Unit
 NO se persiste como segunda verdad; solo el costo calculado vive en Item Price.
 """
 
+import io
+
 import frappe
 from frappe import _
 from frappe.utils import cint
@@ -153,15 +155,20 @@ def _apply(plan, company):
 	}
 
 
-def sync_microsoft_catalog(file_path, dry_run=True, company=None):
+def sync_microsoft_catalog(file, dry_run=True, company=None):
 	"""Sincroniza el catálogo Microsoft desde un .xlsx.
+
+	`file`: ruta local (str/os.PathLike), contenido binario del .xlsx (bytes/bytearray) u
+	objeto file-like. El binario se envuelve en BytesIO para openpyxl (compat. con archivos
+	gestionados por Frappe/`File.get_content()`, sin depender de una ruta local).
 
 	dry_run=True: analiza y devuelve el resumen SIN modificar datos.
 	dry_run=False: aplica (Items + Item Price + Item Default; deshabilita ausentes).
 	`company`: Company objetivo del Item Default (obligatoria si hay varias; ver resolve_company).
 	"""
 	dry_run = bool(cint(dry_run)) if not isinstance(dry_run, bool) else dry_run
-	rows, _header = read_catalog(file_path)  # CatalogError si estructura invalida
+	source = io.BytesIO(file) if isinstance(file, (bytes, bytearray)) else file
+	rows, _header = read_catalog(source)  # CatalogError si estructura invalida
 	preflight_ok = frappe.db.exists("UOM", STOCK_UOM) and frappe.db.exists("Item Group", ITEM_GROUP)
 	target_company = None
 	if not dry_run:
@@ -197,9 +204,10 @@ def run_sync_from_single(dry_run: int = 1):
 	if not file_url:
 		frappe.throw(_("Adjunte el archivo .xlsx del catalogo Microsoft primero."))
 	file_doc = frappe.get_doc("File", {"file_url": file_url})
-	report = sync_microsoft_catalog(
-		file_doc.get_full_path(), dry_run=dry_run, company=single.get("target_company")
-	)
+	# get_content() es la abstracción nativa de Frappe: funciona con archivos locales y con
+	# almacenamiento externo (p. ej. dfp_external_storage/B2), sin exigir una ruta local.
+	content = file_doc.get_content()
+	report = sync_microsoft_catalog(content, dry_run=dry_run, company=single.get("target_company"))
 	single.reload()
 	single.last_run_dry_run = 1 if dry_run else 0
 	single.last_run_at = frappe.utils.now()

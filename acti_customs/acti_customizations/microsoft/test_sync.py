@@ -8,17 +8,24 @@ para verificar que se IGNORA). Las pruebas de `apply` requieren una Company en e
 en un site pelón (CI sin setup wizard) se omiten y el pipeline se valida en un site configurado.
 """
 
+import io
 import os
 import tempfile
+from unittest import mock
 
 import frappe
 import openpyxl
 from frappe.tests.utils import FrappeTestCase
 
+from acti_customs.acti_customizations.microsoft import sync as sync_mod
 from acti_customs.acti_customizations.microsoft.catalog import SHEET, CatalogError
 from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM
 from acti_customs.acti_customizations.microsoft.pricing import PRICE_LIST
-from acti_customs.acti_customizations.microsoft.sync import resolve_company, sync_microsoft_catalog
+from acti_customs.acti_customizations.microsoft.sync import (
+	resolve_company,
+	run_sync_from_single,
+	sync_microsoft_catalog,
+)
 from acti_customs.acti_customizations.microsoft.test_materializer import _prereqs
 
 COLUMNS = [
@@ -111,6 +118,18 @@ class TestSync(FrappeTestCase):
 		wb.save(path)
 		return path
 
+	def _xlsx_bytes(self, rows):
+		"""Devuelve el .xlsx como bytes en memoria (sin ruta local), como File.get_content()."""
+		wb = openpyxl.Workbook()
+		ws = wb.active
+		ws.title = SHEET
+		ws.append(COLUMNS)
+		for r in rows:
+			ws.append([r.get(c, "") for c in COLUMNS])
+		buf = io.BytesIO()
+		wb.save(buf)
+		return buf.getvalue()
+
 	def _apply(self, rows):
 		return sync_microsoft_catalog(self._xlsx(rows), dry_run=False, company=self._company)
 
@@ -130,6 +149,37 @@ class TestSync(FrappeTestCase):
 		self.assertEqual(rep["items_new"], 2)
 		self.assertNotIn("applied", rep)
 		self.assertEqual(frappe.db.count("Item", {"item_group": ITEM_GROUP}), 0)
+
+	# --- compatibilidad con contenido binario (File gestionado, sin ruta local) ---
+	def test_dry_run_desde_contenido_binario(self):
+		"""sync_microsoft_catalog acepta bytes del .xlsx (get_content), no solo una ruta."""
+		rep = sync_microsoft_catalog(self._xlsx_bytes([ROW_A, ROW_B]), dry_run=True)
+		self.assertEqual(rep["rows_valid"], 2)
+		self.assertEqual(rep["items_new"], 2)
+		self.assertNotIn("applied", rep)
+
+	def test_run_sync_from_single_usa_get_content_sin_get_full_path(self):
+		"""run_sync_from_single lee el File por get_content() y NO llama get_full_path()."""
+		single = mock.MagicMock()
+		single.catalog_file = "/private/files/catalogo.xlsx"
+		single.get.return_value = None  # target_company no requerida en dry-run
+
+		file_doc = mock.MagicMock()
+		file_doc.get_content.return_value = self._xlsx_bytes([ROW_A, ROW_B])
+		file_doc.get_full_path.side_effect = AssertionError("get_full_path() no debe usarse")
+
+		with (
+			mock.patch.object(sync_mod.frappe, "only_for"),
+			mock.patch.object(sync_mod.frappe, "get_single", return_value=single),
+			mock.patch.object(sync_mod.frappe, "get_doc", return_value=file_doc),
+		):
+			rep = run_sync_from_single(dry_run=1)
+
+		self.assertTrue(rep["dry_run"])
+		self.assertEqual(rep["rows_valid"], 2)
+		file_doc.get_content.assert_called_once()
+		file_doc.get_full_path.assert_not_called()
+		single.save.assert_called_once()
 
 	# --- apply (requiere Company) ---
 	def test_apply_crea_item_price_itemdefault(self):

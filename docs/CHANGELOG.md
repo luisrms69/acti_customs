@@ -1,5 +1,15 @@
 # Changelog — acti_customs
 
+## [0.3.2] — 2026-09-29
+
+### Fixed
+- **Microsoft Catalog Sync** ahora lee el archivo adjunto mediante la abstracción nativa de Frappe
+  `File.get_content()` en lugar de `File.get_full_path()`. Esto lo hace compatible con almacenamiento
+  externo (p. ej. `dfp_external_storage`/B2), donde el `File` no tiene una ruta local y
+  `get_full_path()` fallaba con `ValidationError: Cannot access file path`. `sync_microsoft_catalog()`
+  acepta ahora ruta local **o** contenido binario del `.xlsx`; Dry Run/Apply y el modelo del catálogo
+  no cambian. Sin dependencia hacia `dfp_external_storage`.
+
 ## [0.2.0] — 2026-09-25
 
 ### Added
