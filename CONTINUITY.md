@@ -29,11 +29,14 @@
     (el input impide `.`/no-dígitos, "3.5" no llega a truncarse) + guard server-side `require_whole_qty()`.
     No se toca la UOM `E48 - Servicio` (compartida con servicios fraccionables).
   - **ADR-0003** documenta el rework y **supersede ADR-0001**; actualiza ADR-0002.
-- **Versión:** 0.3.0 (MINOR — nueva arquitectura del catálogo/cotizador).
+- **Versión:** 0.3.2. Tras el `v0.3.0`: `0.3.1` (fix: mostrar cotizador en cotizaciones nuevas) y
+  `0.3.2` (fix: Microsoft Catalog Sync lee el archivo con `File.get_content()` en vez de
+  `get_full_path()`, compatible con almacenamiento externo/B2; sin dependencia hacia `dfp_external_storage`).
 
 ## En curso / siguiente
 
-- Rama `feat/microsoft-native-catalog` lista para PR contra `version-16` (bump `0.2.0 → 0.3.0`).
+- `v0.3.2` en `/ship pr` (rama `fix/microsoft-catalog-getcontent` → `version-16`). Tras merge:
+  actualizar `acti_customs` en producción y repetir el Dry Run del catálogo desde la GUI.
 
 ## Fuera de alcance (etapas posteriores)
 
