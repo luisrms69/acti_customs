@@ -33,10 +33,24 @@
   `0.3.2` (fix: Microsoft Catalog Sync lee el archivo con `File.get_content()` en vez de
   `get_full_path()`, compatible con almacenamiento externo/B2; sin dependencia hacia `dfp_external_storage`).
 
+- **Bloque 4 — Moneda default del cotizador + retiro vía `ms_catalog_active` (v0.4.0, ADR-0004):**
+  implementado y validado en el site de tests (`test_sync` 20/20, `test_quoter` 43/43).
+  - **Retiro comercial** con Custom Field `ms_catalog_active` (default 1), **no** con `Item.disabled`
+    (que bloqueaba conversión/facturación de documentos existentes vía `validate_end_of_life`).
+    Ausente → `ms_catalog_active=0, disabled=0` (operable) + cierre de vigencia; reaparición → 1.
+    Selector y guard de alta exigen `ms_catalog_active=1`. Legacy intacto.
+  - **Transición sin patches:** la normaliza el **Apply** del sync (Dry Run la reporta como
+    `items_needing_transition`). **Prohibido** usar patches de datos en `acti_customs`.
+  - **Moneda default** `default_quote_currency` (Single *Microsoft Catalog Sync*, default USD); el JS
+    la aplica solo en Quotation nueva y sin líneas (nativo, respeta existentes).
+  - **Reporte nativo** del sync vía `frappe.msgprint` (tarjetas + tablas); JSON en `last_result`.
+
 ## En curso / siguiente
 
-- `v0.3.2` en `/ship pr` (rama `fix/microsoft-catalog-getcontent` → `version-16`). Tras merge:
-  actualizar `acti_customs` en producción y repetir el Dry Run del catálogo desde la GUI.
+- `v0.4.0` en `/ship pr` (rama `feat/microsoft-currency-and-catalog-retirement` → `version-16`). Tras
+  merge y release: actualizar `acti_customs` en staging, `bench migrate` (previa verificación de la
+  tabla huérfana `Microsoft Offer`), validar moneda/reporte, Dry Run y —con autorización— Apply para
+  normalizar el catálogo.
 
 ## Fuera de alcance (etapas posteriores)
 
