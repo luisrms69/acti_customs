@@ -1,5 +1,16 @@
 # Changelog — acti_customs
 
+## [0.4.3] — 2026-10-13
+
+### Fixed
+- **Microsoft Catalog Sync — `frappe.utils.cint is not a function`.** El renderizador del reporte usaba
+  `frappe.utils.cint`, que **no existe en el cliente** (`cint` es un global del desk, `window.cint`),
+  por lo que la construcción del reporte fallaba (el mensaje de error nativo ya funcionaba desde
+  v0.4.2). Se reemplaza por un helper JS local `toInt` (null/undefined/""/no numérico → 0). Única
+  dependencia `frappe.utils.*` restante: `escape_html` (sí existe en el cliente). **Solo presentación**:
+  sin cambios en backend, sincronizador, datos ni esquema. Las pruebas de regresión dejan de stubbear
+  `cint` (reflejan el cliente real) y cubren el handler de **Dry Run y Apply** (éxito/vacío/error).
+
 ## [0.4.2] — 2026-10-13
 
 ### Fixed

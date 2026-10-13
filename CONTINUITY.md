@@ -51,12 +51,13 @@
   eliminada; `/sync-check` limpio.
 - **`v0.4.1` liberado:** PR #8 merged (`c8f06fc`), tag + Release `v0.4.1`; rama eliminada; fix del texto
   de ayuda `intro` del Single (`microtemplate.js` no escapa pares de comillas simples) → comillas dobles.
-- **`v0.4.2` en `/ship pr`** (rama `fix/microsoft-catalog-sync-report-display` → `version-16`): el reporte
-  del Dry Run/Apply no se mostraba (helper top-level suelto + `.catch` que tragaba la excepción). Fix:
-  helper namespaced `acti_customs.ms_catalog_sync.render_report` + handler que SIEMPRE muestra msgprint
-  (éxito/vacío/error). Pruebas del handler real además de `render_report`. Solo presentación.
-- Tras merge/release de v0.4.2: actualizar `acti_customs` en staging, `bench migrate`, y validar en el
-  navegador que el Dry Run muestra el reporte; luego moneda/reporte, Dry Run y —con autorización— Apply.
+- **`v0.4.2` liberado:** PR #9 merged (`2857beb`), tag + Release `v0.4.2`; rama eliminada. Fix: el reporte
+  no se mostraba (helper suelto + `.catch` silencioso) → helper namespaced + handler que siempre muestra msgprint.
+- **`v0.4.3` en `/ship pr`** (rama `fix/microsoft-catalog-sync-cint` → `version-16`): `frappe.utils.cint is
+  not a function` en el reporte (cint es global del desk, no `frappe.utils.cint`). Fix: helper JS local
+  `toInt`. Las pruebas dejan de stubbear `cint` (reflejan el cliente) y cubren Dry Run + Apply. Solo presentación.
+- Tras merge/release de v0.4.3: actualizar `acti_customs` en staging, refrescar assets del desk (`bench build`),
+  y validar en el navegador que el Dry Run/Apply muestran el reporte con conteos; luego Dry Run y —con autorización— Apply.
 
 ## Fuera de alcance (etapas posteriores)
 

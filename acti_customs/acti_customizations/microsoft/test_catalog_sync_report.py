@@ -42,7 +42,7 @@ global.frappe = {
   provide: (ns) => { const p = ns.split("."); let o = global; for (const x of p) { o[x] = o[x] || {}; o = o[x]; } return o; },
   ui: { form: { on: () => {} } },
   defaults: { get_default: () => null },
-  utils: { escape_html: (s) => String(s == null ? "" : s), cint: (n) => { n = parseInt(n, 10); return isNaN(n) ? 0 : n; } },
+  utils: { escape_html: (s) => String(s == null ? "" : s) },  /* SIN cint: no existe en frappe.utils del cliente (es global window.cint) */
 };
 global.__ = (s) => s;
 eval(fs.readFileSync(process.argv[1], "utf8"));
@@ -72,7 +72,7 @@ global.frappe = {
   dom: { freeze: () => {}, unfreeze: () => {} },
   defaults: { get_default: () => null },
   confirm: (m, cb) => cb && cb(),
-  utils: { escape_html: (s) => String(s == null ? "" : s), cint: (n) => { n = parseInt(n, 10); return isNaN(n) ? 0 : n; } },
+  utils: { escape_html: (s) => String(s == null ? "" : s) },  /* SIN cint: no existe en frappe.utils del cliente (es global window.cint) */
   call: (opts) => callBehavior(opts),
   msgprint: (a) => { msgprintCalls.push(a); },
 };
@@ -89,40 +89,47 @@ const frm = {
 };
 formHandlers.refresh(frm);
 const dryRun = buttons["Dry Run"];
+const applyBtn = buttons["Aplicar catalogo"];  // dispara frappe.confirm → run(false)
 const flush = () => new Promise((r) => setImmediate(r));
 const dry = __DRY__;
+const apply = Object.assign({}, dry, { applied: { items_created: 120, items_updated: 3808,
+  items_reactivated: 0, prices_upserted: 3928, item_defaults_set: 3928, items_retired: 2, row_errors: [] } });
+
+const snap = () => ({
+  calls: msgprintCalls.length,
+  indicator: (msgprintCalls[0] || {}).indicator,
+  title: String((msgprintCalls[0] || {}).title || ""),
+  message: String((msgprintCalls[0] || {}).message || ""),
+  hasMessage: typeof (msgprintCalls[0] || {}).message === "string" && (msgprintCalls[0] || {}).message.length > 0,
+});
 
 (async () => {
-  const out = { button_registered: typeof dryRun === "function" };
+  const out = { dry_button: typeof dryRun === "function", apply_button: typeof applyBtn === "function" };
 
-  // 1) Éxito: debe invocar msgprint con el reporte (indicator azul, mensaje presente, título Dry Run).
+  // DRY RUN — éxito: msgprint con el reporte (azul, título Dry Run).
   msgprintCalls = []; callBehavior = () => Promise.resolve({ message: dry });
   dryRun(); await flush(); await flush(); await flush();
-  out.success = {
-    calls: msgprintCalls.length,
-    indicator: (msgprintCalls[0] || {}).indicator,
-    hasMessage: typeof (msgprintCalls[0] || {}).message === "string" && (msgprintCalls[0] || {}).message.length > 0,
-    titleHasDryRun: String((msgprintCalls[0] || {}).title || "").includes("Dry Run"),
-  };
+  out.dry_success = snap();
 
-  // 2) Respuesta vacía: aviso explícito (nunca silencio).
+  // DRY RUN — respuesta vacía: aviso explícito (nunca silencio).
   msgprintCalls = []; callBehavior = () => Promise.resolve({ message: null });
   dryRun(); await flush(); await flush(); await flush();
-  out.empty = {
-    calls: msgprintCalls.length,
-    indicator: (msgprintCalls[0] || {}).indicator,
-    message: String((msgprintCalls[0] || {}).message || ""),
-  };
+  out.dry_empty = snap();
 
-  // 3) Rechazo (error de backend): mensaje de error comprensible con el detalle.
+  // DRY RUN — rechazo del backend: mensaje de error comprensible con el detalle.
   msgprintCalls = []; callBehavior = () => Promise.reject(new Error("boom-500"));
   dryRun(); await flush(); await flush(); await flush();
-  out.error = {
-    calls: msgprintCalls.length,
-    indicator: (msgprintCalls[0] || {}).indicator,
-    title: String((msgprintCalls[0] || {}).title || ""),
-    message: String((msgprintCalls[0] || {}).message || ""),
-  };
+  out.dry_error = snap();
+
+  // APPLY — éxito: msgprint con el reporte (verde, título Aplicado).
+  msgprintCalls = []; callBehavior = () => Promise.resolve({ message: apply });
+  applyBtn(); await flush(); await flush(); await flush();
+  out.apply_success = snap();
+
+  // APPLY — rechazo del backend: mensaje de error rojo.
+  msgprintCalls = []; callBehavior = () => Promise.reject(new Error("apply-boom"));
+  applyBtn(); await flush(); await flush(); await flush();
+  out.apply_error = snap();
 
   process.stdout.write(JSON.stringify(out));
 })();
@@ -160,31 +167,54 @@ class TestCatalogSyncReportRender(FrappeTestCase):
 			)
 
 
-class TestCatalogSyncDryRunHandler(FrappeTestCase):
-	"""Prueba el handler REAL del botón Dry Run, no render_report aislado."""
+class TestCatalogSyncHandler(FrappeTestCase):
+	"""Prueba el handler REAL de los botones Dry Run y Aplicar (no render_report aislado).
+
+	El stub de `frappe.utils` NO incluye `cint` (igual que el cliente real): si el renderizador
+	usara `frappe.utils.cint` lanzaría y el msgprint del reporte no se construiría — reproduciendo
+	el fallo de staging v0.4.2 `frappe.utils.cint is not a function`.
+	"""
 
 	def setUp(self):
 		self.out = _run_node(_HANDLER_HARNESS)
 		if self.out is None:
 			self.skipTest("node no disponible")
-		self.assertTrue(self.out["button_registered"], "El botón Dry Run debe registrarse en refresh()")
+		self.assertTrue(self.out["dry_button"], "El botón Dry Run debe registrarse en refresh()")
+		self.assertTrue(self.out["apply_button"], "El botón Aplicar debe registrarse en refresh()")
 
 	def test_dry_run_exitoso_invoca_msgprint_con_reporte(self):
-		s = self.out["success"]
+		s = self.out["dry_success"]
 		self.assertEqual(s["calls"], 1, "Dry Run exitoso debe invocar msgprint exactamente una vez")
 		self.assertEqual(s["indicator"], "blue", "El reporte Dry Run usa indicador azul")
-		self.assertTrue(s["hasMessage"], "El msgprint debe llevar el HTML del reporte")
-		self.assertTrue(s["titleHasDryRun"], "El título debe identificar el Dry Run")
+		self.assertTrue(
+			s["hasMessage"], "El msgprint debe llevar el HTML del reporte (sin frappe.utils.cint)"
+		)
+		self.assertIn("Dry Run", s["title"])
 
 	def test_dry_run_respuesta_vacia_muestra_aviso(self):
-		e = self.out["empty"]
+		e = self.out["dry_empty"]
 		self.assertEqual(e["calls"], 1, "Respuesta vacía debe mostrar un aviso (nunca silencio)")
 		self.assertEqual(e["indicator"], "orange")
 		self.assertIn("no devolvió", e["message"])
 
 	def test_dry_run_error_muestra_mensaje_comprensible(self):
-		er = self.out["error"]
+		er = self.out["dry_error"]
 		self.assertEqual(er["calls"], 1, "Un rechazo del backend debe mostrar un mensaje de error")
 		self.assertEqual(er["indicator"], "red")
 		self.assertIn("error", er["title"].lower())
 		self.assertIn("boom-500", er["message"])
+
+	def test_apply_exitoso_invoca_msgprint_con_reporte(self):
+		s = self.out["apply_success"]
+		self.assertEqual(s["calls"], 1, "Apply exitoso debe invocar msgprint exactamente una vez")
+		self.assertEqual(s["indicator"], "green", "El reporte Apply usa indicador verde")
+		self.assertTrue(
+			s["hasMessage"], "El msgprint debe llevar el HTML del reporte (sin frappe.utils.cint)"
+		)
+		self.assertIn("Aplicado", s["title"])
+
+	def test_apply_error_muestra_mensaje_comprensible(self):
+		er = self.out["apply_error"]
+		self.assertEqual(er["calls"], 1, "Un rechazo del backend en Apply debe mostrar un mensaje de error")
+		self.assertEqual(er["indicator"], "red")
+		self.assertIn("apply-boom", er["message"])
