@@ -1,5 +1,17 @@
 # Changelog — acti_customs
 
+## [0.4.2] — 2026-10-13
+
+### Fixed
+- **Microsoft Catalog Sync — el reporte de Dry Run/Apply no se mostraba** (ni mensaje ni error). El
+  helper de presentación era una función top-level "suelta" y el `.catch` del handler tragaba en
+  silencio cualquier excepción. Se expone el helper bajo el namespace `acti_customs.ms_catalog_sync`
+  (alcanzable desde el controlador en el bundle del desk, como `quotation_microsoft.js` con
+  `acti_customs.ms`) y el handler ahora **siempre** muestra un `frappe.msgprint`: el reporte en éxito,
+  un aviso en respuesta vacía y un mensaje de error comprensible si el backend falla. `render_report`
+  es defensivo (nunca lanza). **Solo presentación**: sin cambios en el sincronizador ni sus datos.
+  Pruebas del **handler real** de Dry Run (éxito/vacío/error) además de `render_report` aislado.
+
 ## [0.4.1] — 2026-10-13
 
 ### Fixed

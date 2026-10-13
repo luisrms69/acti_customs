@@ -5,6 +5,13 @@
 // sigue devolviendo el MISMO JSON (y lo guarda en `last_result` para auditoría/pruebas); aquí solo
 // se transforma ese JSON en un resumen legible: cabecera Dry Run/Apply, tarjetas de conteos, tablas
 // acotadas de novedades (con "+N más") y errores. Sin DocTypes, páginas ni dependencias nuevas.
+//
+// El helper de presentación se expone bajo `acti_customs.ms_catalog_sync` (mismo patrón que
+// `quotation_microsoft.js` con `acti_customs.ms`). Una función top-level "suelta" NO es confiablemente
+// alcanzable desde el closure del controlador en el bundle del desk; además, el `.catch` del handler
+// debe SURFACEAR el error (no tragarlo), para que el usuario siempre vea un resultado comprensible.
+
+frappe.provide("acti_customs.ms_catalog_sync");
 
 frappe.ui.form.on("Microsoft Catalog Sync", {
 	refresh(frm) {
@@ -26,12 +33,41 @@ frappe.ui.form.on("Microsoft Catalog Sync", {
 				})
 				.then((r) => {
 					frappe.dom.unfreeze();
-					if (r.message) {
-						frappe.msgprint(render_sync_report(r.message));
-						frm.reload_doc();
+					const data = r && r.message;
+					if (!data) {
+						// El servidor respondió sin resultados: avisar explícitamente (nunca silencio).
+						frappe.msgprint({
+							title: __("Sincronización catálogo Microsoft"),
+							indicator: "orange",
+							message: __("El servidor no devolvió resultados para mostrar."),
+						});
+						return;
+					}
+					// Mostrar SIEMPRE el reporte. reload_doc (refresca last_run_*) es secundario y no debe
+					// impedir el diálogo: se dispara después y cualquier fallo suyo se ignora, no tapa el mensaje.
+					frappe.msgprint(acti_customs.ms_catalog_sync.render_report(data));
+					try {
+						const p = frm.reload_doc();
+						if (p && typeof p.catch === "function") p.catch(() => {});
+					} catch (e) {
+						// no-op: el reporte ya se mostró
 					}
 				})
-				.catch(() => frappe.dom.unfreeze());
+				.catch((e) => {
+					// NUNCA tragar el error en silencio: mostrar un mensaje comprensible (requisito del reporte).
+					frappe.dom.unfreeze();
+					const detail =
+						e && (e.message || e._server_messages)
+							? "<br><pre style='white-space:pre-wrap'>" +
+							  frappe.utils.escape_html(String(e.message || e._server_messages)) +
+							  "</pre>"
+							: "";
+					frappe.msgprint({
+						title: __("Sincronización catálogo Microsoft — error"),
+						indicator: "red",
+						message: __("No se pudo completar la operación.") + detail,
+					});
+				});
 		};
 
 		frm.add_custom_button(__("Dry Run"), () => run(true));
@@ -45,8 +81,11 @@ frappe.ui.form.on("Microsoft Catalog Sync", {
 });
 
 // Construye el objeto {title, indicator, message} para frappe.msgprint a partir del JSON del backend.
-function render_sync_report(msg) {
+// Expuesto en el namespace del app (alcanzable desde el controlador en el bundle del desk) y
+// defensivo: nunca lanza (msg ausente/parcial → se degrada), para garantizar que SIEMPRE haya mensaje.
+acti_customs.ms_catalog_sync.render_report = function (msg) {
 	const esc = frappe.utils.escape_html;
+	msg = msg || {}; // null/undefined → objeto vacío (defensivo; el handler ya filtra, doble resguardo)
 	const a = msg.applied; // presente solo en Apply
 	const is_apply = !!a;
 	const errors = is_apply ? a.row_errors || [] : msg.errors || [];
@@ -173,4 +212,4 @@ function render_sync_report(msg) {
 		indicator: indicator,
 		message: banner + cards + novedades + errs_html + footer,
 	};
-}
+};
