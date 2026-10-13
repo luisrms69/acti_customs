@@ -30,5 +30,17 @@ con un mensaje claro.
 ## Idempotencia
 
 Volver a cargar el mismo Excel no crea Items nuevos ni duplicados. Un cambio de precio/vigencia
-actualiza el catálogo sin recrear el Item; una oferta que desaparece del archivo se marca inactiva
-sin borrar su Item.
+actualiza el catálogo sin recrear el Item; una oferta que **desaparece** del archivo se **retira del
+catálogo** (campo `MS Disponible en catálogo = 0`): deja de ofrecerse en el **Cotizador Microsoft**,
+pero su **Item permanece habilitado** para completar operaciones en documentos existentes (cotizaciones
+ganadas, órdenes y facturas) y se **cierra la vigencia** de su precio de compra sin borrar histórico.
+Si el código **reaparece** en un Excel posterior, recupera su disponibilidad comercial. El retiro ya
+**no** usa `Item.disabled`, de modo que un producto retirado no bloquea la facturación de compromisos
+vigentes. Los Items legacy ajenos al catálogo NCE no se tocan.
+
+## Reporte de la sincronización
+
+Tras un **Dry Run** o un **Aplicar catálogo**, el resultado se muestra en un diálogo nativo con un
+resumen de conteos (procesados, nuevos, actualizados, retirados, reactivados, errores) y tablas
+acotadas con las novedades; si hay muchos registros, se listan los primeros y se indica cuántos más
+existen. El Dry Run analiza **sin** modificar datos.

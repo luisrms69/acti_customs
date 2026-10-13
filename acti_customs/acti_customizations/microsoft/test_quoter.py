@@ -13,9 +13,11 @@ from frappe.utils import flt
 from acti_customs.acti_customizations.microsoft.materializer import ITEM_GROUP, STOCK_UOM, upsert_item
 from acti_customs.acti_customizations.microsoft.quoter import (
 	QuoterError,
+	_candidates,
 	add_license_as_cost,
 	add_license_to_quotation,
 	build_required_row,
+	get_default_quote_currency,
 	get_price_preview,
 	next_step,
 	price_summary,
@@ -157,6 +159,40 @@ class TestQuoter(FrappeTestCase):
 			self.a_monthly_com,
 		)
 		self.assertEqual(resolve_path({"product_title": "Prod B"})["resolved"]["item"], self.trial)
+
+	# --- retiro comercial (ms_catalog_active) ---
+	def test_selector_excluye_items_retirados(self):
+		# Una oferta retirada (ms_catalog_active=0) desaparece del selector, aunque siga habilitada.
+		frappe.db.set_value("Item", self.a_monthly_com, "ms_catalog_active", 0)
+		names = {c["name"] for c in _candidates({})}
+		self.assertNotIn(self.a_monthly_com, names)
+		self.assertIn(self.a_annual_com, names)  # las vigentes siguen disponibles
+
+	def test_preview_rechaza_item_retirado(self):
+		# Guard backend: no se puede cotizar (preview) una oferta retirada, ni por llamada directa.
+		frappe.db.set_value("Item", self.a_monthly_com, "ms_catalog_active", 0)
+		with self.assertRaises(QuoterError):
+			get_price_preview(self.a_monthly_com, qty=1, margin_pct=20, **_NEW_CTX)
+
+	def test_add_license_rechaza_item_retirado(self):
+		# Guard backend en el alta a cotización: una oferta retirada no se agrega (ni UI ni API directa).
+		q = self._quotation()
+		if q is None:
+			self.skipTest("Site sin infraestructura de venta.")
+		frappe.db.set_value("Item", self.a_monthly_com, "ms_catalog_active", 0)
+		with self.assertRaises(QuoterError):
+			add_license_to_quotation(q.name, self.a_monthly_com, qty=1, margin_pct=20)
+		q.reload()
+		self.assertEqual(len(q.items), 0)
+
+	# --- moneda predeterminada del cotizador ---
+	def test_default_quote_currency_configurada(self):
+		frappe.db.set_single_value("Microsoft Catalog Sync", "default_quote_currency", "MXN")
+		self.assertEqual(get_default_quote_currency(), "MXN")
+
+	def test_default_quote_currency_fallback_usd(self):
+		frappe.db.set_single_value("Microsoft Catalog Sync", "default_quote_currency", "")
+		self.assertEqual(get_default_quote_currency(), "USD")
 
 	def _shared_skuid_items(self):
 		"""Dos ofertas que comparten product_title+sku_title pero difieren en sku_id (NO visible) y term."""

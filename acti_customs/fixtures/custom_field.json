@@ -97,5 +97,19 @@
   "insert_after": "ms_product_title",
   "read_only": 1,
   "module": "ACTI Customizations"
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Item-ms_catalog_active",
+  "dt": "Item",
+  "fieldname": "ms_catalog_active",
+  "label": "MS Disponible en catalogo",
+  "fieldtype": "Check",
+  "default": "1",
+  "insert_after": "ms_sku_title",
+  "read_only": 1,
+  "in_standard_filter": 1,
+  "description": "1 = oferta vigente en el catalogo Microsoft (visible en el cotizador). 0 = retirada del catalogo: el Item sigue habilitado en ERPNext para completar operaciones, pero no aparece en el cotizador. Lo administra el sincronizador; no editar a mano.",
+  "module": "ACTI Customizations"
  }
 ]

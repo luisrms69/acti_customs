@@ -83,6 +83,7 @@ def _build_item(row, item_code):
 	item.is_sales_item = 1
 	item.is_purchase_item = 1
 	item.disabled = 0
+	item.ms_catalog_active = 1  # oferta vigente en el catalogo (visible en el cotizador)
 	if item.meta.has_field("sales_uom"):
 		item.sales_uom = STOCK_UOM
 	_apply_metadata(item, row)
@@ -99,10 +100,23 @@ def upsert_item(row):
 	code = item_code_for(row)
 	if frappe.db.exists("Item", code):
 		item = frappe.get_doc("Item", code)
-		before = (item.item_name, item.get("description"), item.get("ms_product_title"), item.disabled)
+		before = (
+			item.item_name,
+			item.get("description"),
+			item.get("ms_product_title"),
+			item.disabled,
+			item.get("ms_catalog_active"),
+		)
 		_apply_metadata(item, row)
-		item.disabled = 0  # reactivar si reaparece
-		after = (item.item_name, item.get("description"), item.get("ms_product_title"), item.disabled)
+		item.disabled = 0  # el retiro ya no usa disabled; garantizamos operabilidad del Item
+		item.ms_catalog_active = 1  # presente en el catalogo -> disponible comercialmente (reaparicion)
+		after = (
+			item.item_name,
+			item.get("description"),
+			item.get("ms_product_title"),
+			item.disabled,
+			item.get("ms_catalog_active"),
+		)
 		if before != after:
 			item.save(ignore_permissions=True)
 		return code

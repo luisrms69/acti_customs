@@ -39,6 +39,9 @@ from acti_customs.acti_customizations.microsoft.pricing import (
 
 VALID_SEGMENTS = ("Commercial", "Education", "Charity")
 
+# Tope de códigos listados en `details` del reporte (presentación acotada; el conteo total va aparte).
+DETAIL_LIMIT = 50
+
 
 def resolve_company(explicit, companies):
 	"""Company objetivo del Item Default (pura, determinista; sin selección silenciosa).
@@ -80,13 +83,18 @@ def _plan(rows):
 	legacy/manuales que compartan el Item Group pero NO tengan `ms_product_id` quedan FUERA (no se
 	cuentan ni se desactivan): el sync solo administra las ofertas Microsoft NCE.
 	"""
-	existing = set(
-		frappe.get_all(
-			"Item",
-			filters={"item_group": ITEM_GROUP, "ms_product_id": ["is", "set"]},
-			pluck="name",
-		)
+	existing_rows = frappe.get_all(
+		"Item",
+		filters={"item_group": ITEM_GROUP, "ms_product_id": ["is", "set"]},
+		fields=["name", "disabled", "ms_catalog_active"],
 	)
+	existing = {r.name for r in existing_rows}
+	# "retirado" = fuera de catalogo: ms_catalog_active=0 O (compat.) deshabilitado por el sync viejo.
+	retired_now = {r.name for r in existing_rows if not r.ms_catalog_active or r.disabled}
+	# Transicion (sin patch): Items NCE que el sync viejo dejo en disabled=1. El Apply los normaliza a
+	# disabled=0 (operables) via upsert (si siguen en catalogo) o via retiro (si ausentes). Solo se
+	# REPORTAN aqui; el Dry Run no escribe.
+	needs_transition = sorted(r.name for r in existing_rows if r.disabled)
 	errors, valid, file_codes = [], [], set()
 	for r in rows:
 		if r["segment"] not in VALID_SEGMENTS:
@@ -103,27 +111,31 @@ def _plan(rows):
 		file_codes.add(code)
 		valid.append((code, r))
 
-	to_disable = sorted(existing - file_codes)
+	to_retire = sorted(existing - file_codes)
 	items_new = [c for c, _r in valid if c not in existing]
 	items_existing = [c for c, _r in valid if c in existing]
+	# reactivaciones: codigos presentes en el archivo que hoy estan retirados y recuperan disponibilidad.
+	items_reactivated = sorted(c for c in items_existing if c in retired_now)
 	return {
 		"valid": valid,
 		"errors": errors,
 		"items_new": items_new,
 		"items_existing": items_existing,
-		"to_disable": to_disable,
+		"items_reactivated": items_reactivated,
+		"needs_transition": needs_transition,
+		"to_retire": to_retire,
 	}
 
 
 def _apply(plan, company):
-	created = updated = prices = defaults = disabled = 0
+	created = updated = prices = defaults = retired = 0
 	errors = []
 	existing_new = set(plan["items_new"])
 	n = 0
 	for code, r in plan["valid"]:
 		try:
 			was_new = code in existing_new
-			upsert_item(r)
+			upsert_item(r)  # crea/reactiva + ms_catalog_active=1 + disabled=0
 			created += 1 if was_new else 0
 			updated += 0 if was_new else 1
 			cost = microsoft_cost(r.get("unit_price"), r["term_duration"], r["billing_plan"])
@@ -139,18 +151,22 @@ def _apply(plan, company):
 		if n % 200 == 0:
 			frappe.db.commit()  # nosemgrep: frappe-manual-commit -- carga masiva por lotes; commit controlado
 
-	for code in plan["to_disable"]:
-		frappe.db.set_value("Item", code, "disabled", 1)
+	for code in plan["to_retire"]:
+		# Retiro comercial SIN bloquear operaciones: ms_catalog_active=0 (fuera del cotizador) y
+		# disabled=0 (el Item sigue operable para facturar compromisos existentes). Cierra vigencias
+		# del costo, conservando el historico. No se borra nada.
+		frappe.db.set_value("Item", code, {"ms_catalog_active": 0, "disabled": 0})
 		close_open_item_prices(code)
-		disabled += 1
+		retired += 1
 
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit -- commit final controlado del apply
 	return {
 		"items_created": created,
 		"items_updated": updated,
+		"items_reactivated": len(plan["items_reactivated"]),
 		"prices_upserted": prices,
 		"item_defaults_set": defaults,
-		"items_disabled": disabled,
+		"items_retired": retired,
 		"row_errors": errors,
 	}
 
@@ -186,8 +202,17 @@ def sync_microsoft_catalog(file, dry_run=True, company=None):
 		"rows_valid": len(plan["valid"]),
 		"items_new": len(plan["items_new"]),
 		"items_existing": len(plan["items_existing"]),
-		"items_to_disable": len(plan["to_disable"]),
+		"items_reactivated": len(plan["items_reactivated"]),
+		"items_needing_transition": len(plan["needs_transition"]),
+		"items_to_retire": len(plan["to_retire"]),
 		"errors": plan["errors"],
+		# Muestras acotadas de códigos para la presentación (la UI las lista; el conteo total va arriba).
+		"details": {
+			"new": plan["items_new"][:DETAIL_LIMIT],
+			"reactivated": plan["items_reactivated"][:DETAIL_LIMIT],
+			"to_retire": plan["to_retire"][:DETAIL_LIMIT],
+			"needs_transition": plan["needs_transition"][:DETAIL_LIMIT],
+		},
 	}
 	if not dry_run:
 		report["applied"] = _apply(plan, target_company)

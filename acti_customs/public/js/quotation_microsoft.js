@@ -357,6 +357,24 @@ acti_customs.ms.open_dialog = function (frm) {
 // se valida además el estado explícito como salvaguarda, con fallback para Quotations sin workflow.
 const DRAFT_WORKFLOW_STATE = "Borrador";
 
+// Moneda predeterminada (configurable en Microsoft Catalog Sync; default USD). Se aplica SOLO al
+// iniciar una Quotation NUEVA y SIN líneas, con set_value nativo (ERPNext recalcula FX/importes).
+// Respeta cotizaciones existentes y cualquier línea ya capturada; el usuario puede cambiarla luego
+// con el campo de moneda nativo. No toca Buying prices, márgenes ni listas de precios.
+function apply_default_ms_currency_then(frm, next) {
+	const no_lines = !(frm.doc.items || []).some((it) => it.item_code);
+	if (!(frm.is_new() && no_lines)) {
+		next();
+		return;
+	}
+	frappe
+		.xcall("acti_customs.acti_customizations.microsoft.quoter.get_default_quote_currency")
+		.then((cur) => {
+			if (cur && cur !== frm.doc.currency) return frm.set_value("currency", cur);
+		})
+		.then(next, next); // abre el cotizador pase lo que pase (no bloquea por el default)
+}
+
 frappe.ui.form.on("Quotation", {
 	refresh(frm) {
 		const is_draft = frm.doc.docstatus === 0;
@@ -364,7 +382,7 @@ frappe.ui.form.on("Quotation", {
 		const in_borrador = !ws || ws === DRAFT_WORKFLOW_STATE;
 		if (is_draft && in_borrador) {
 			frm.add_custom_button(__("Cotizador Microsoft"), () =>
-				acti_customs.ms.open_dialog(frm)
+				apply_default_ms_currency_then(frm, () => acti_customs.ms.open_dialog(frm))
 			);
 		}
 	},

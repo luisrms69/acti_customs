@@ -1,5 +1,37 @@
 # Changelog — acti_customs
 
+## [0.4.0] — 2026-10-13
+
+### Added
+- **Moneda predeterminada del cotizador Microsoft.** Nuevo campo `default_quote_currency` (por defecto
+  **USD**) en el Single *Microsoft Catalog Sync*. Al abrir el cotizador en una cotización **nueva y sin
+  líneas** se aplica esa moneda con el mecanismo nativo de ERPNext (recalcula FX e importes). Respeta
+  cotizaciones existentes y líneas ya capturadas; el usuario puede cambiarla con el campo de moneda
+  nativo. Ver ADR-0004 y `docs/usuario/cotizador-microsoft.md`.
+- **Retiro comercial de ofertas vía `ms_catalog_active`** (Custom Field en `Item`, default 1). Una oferta
+  que desaparece del Excel se marca `ms_catalog_active = 0`: desaparece del cotizador pero **su Item
+  sigue habilitado** para completar operaciones en documentos existentes. Reaparición → vuelve a 1.
+- **Reporte de sincronización nativo.** Dry Run y Apply muestran el resultado con `frappe.msgprint`
+  (tarjetas de conteos + tablas acotadas de novedades y errores); el JSON técnico se conserva en
+  `last_result`. El reporte incluye `items_reactivated`, `items_needing_transition` e `items_to_retire`.
+
+### Changed
+- **El sincronizador ya NO usa `Item.disabled` para retirar ofertas Microsoft.** El `disabled=1` previo
+  bloqueaba conversiones/facturación de documentos existentes (vía `validate_end_of_life`). El retiro
+  ahora es `ms_catalog_active=0` + `disabled=0`, cerrando la vigencia del precio de compra sin borrar
+  histórico. El filtro del cotizador exige `ms_catalog_active=1` y el guard de alta rechaza ofertas
+  retiradas, sin afectar la facturación de compromisos vigentes.
+
+### Migration
+- La transición de Items que el sincronizador anterior dejó en `disabled=1` la realiza el **propio
+  Apply del sincronizador** (presentes → `disabled=0, ms_catalog_active=1`; ausentes → `disabled=0,
+  ms_catalog_active=0`), reportada en Dry Run como `items_needing_transition`. **No se usan patches de
+  datos** ni cambios automáticos durante `bench migrate`/install.
+
+### Notes
+- Sin cambios en core/schema de Frappe/ERPNext. Custom Field por fixtures; nada de Property Setters.
+  Pruebas: `test_sync` 20/20, `test_quoter` 43/43 en el site de tests.
+
 ## [0.3.2] — 2026-09-29
 
 ### Fixed

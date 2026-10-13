@@ -37,6 +37,7 @@ fixtures = [
 					"ms_col_break",
 					"ms_product_title",
 					"ms_sku_title",
+					"ms_catalog_active",
 				],
 			],
 		],

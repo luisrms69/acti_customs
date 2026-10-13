@@ -87,7 +87,12 @@ def _candidates(selected):
 	Mismo criterio NCE que el sync (`_plan`): solo Items con `ms_product_id` set. Items legacy/manuales
 	del mismo Item Group pero SIN `ms_product_id` NO son ofertas Microsoft NCE y quedan fuera del selector.
 	"""
-	filters = {"item_group": ITEM_GROUP, "disabled": 0, "ms_product_id": ["is", "set"]}
+	filters = {
+		"item_group": ITEM_GROUP,
+		"disabled": 0,
+		"ms_catalog_active": 1,
+		"ms_product_id": ["is", "set"],
+	}
 	for k, v in (selected or {}).items():
 		if k in _ITEM_FIELD and v not in (None, ""):
 			filters[_ITEM_FIELD[k]] = v
@@ -277,11 +282,21 @@ def _load_valid_item(item_code):
 	"""Carga y valida que el item_code sea un Item Microsoft activo (fail-closed)."""
 	if not frappe.db.exists("Item", item_code):
 		raise QuoterError(f"Item inexistente: {item_code!r}")
-	vals = frappe.db.get_value("Item", item_code, ["item_group", "disabled"], as_dict=True)
+	vals = frappe.db.get_value(
+		"Item", item_code, ["item_group", "disabled", "ms_catalog_active"], as_dict=True
+	)
 	if vals.item_group != ITEM_GROUP:
 		raise QuoterError(f"El Item {item_code!r} no pertenece al catalogo Microsoft.")
 	if vals.disabled:
 		raise QuoterError(f"El Item {item_code!r} esta deshabilitado.")
+	# Guard de retiro comercial: no se puede AGREGAR una oferta retirada a una cotizacion (ni via UI
+	# ni por llamada directa). NO afecta la facturacion de compromisos existentes: esos flujos nativos
+	# (conversion/facturacion) no pasan por aqui y el Item sigue habilitado (disabled=0).
+	if not vals.ms_catalog_active:
+		raise QuoterError(
+			f"El Item {item_code!r} fue retirado del catalogo Microsoft (no disponible para cotizar). "
+			f"Los compromisos existentes se pueden seguir facturando normalmente."
+		)
 	return item_code
 
 
@@ -353,6 +368,21 @@ def resolve_cost(item_code, transaction_date, currency, company):
 
 
 # --- API whitelisted (para el diálogo en Quotation) ---------------------------
+
+
+DEFAULT_QUOTE_CURRENCY_FALLBACK = "USD"
+
+
+@frappe.whitelist()
+def get_default_quote_currency():
+	"""Moneda predeterminada del cotizador Microsoft (configurable en 'Microsoft Catalog Sync').
+
+	Fuente única: el campo `default_quote_currency` del Single. Fallback a USD (≈98.7% del
+	licenciamiento NCE se factura en USD) si no está configurada. NO cambia la moneda de ningún
+	documento por sí misma; el JS la aplica solo al iniciar una Quotation nueva y sin líneas.
+	"""
+	cur = frappe.db.get_single_value("Microsoft Catalog Sync", "default_quote_currency")
+	return cur or DEFAULT_QUOTE_CURRENCY_FALLBACK
 
 
 @frappe.whitelist()

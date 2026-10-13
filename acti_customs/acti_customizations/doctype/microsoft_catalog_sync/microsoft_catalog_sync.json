@@ -4,6 +4,8 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "quoter_settings_section",
+  "default_quote_currency",
   "intro",
   "catalog_file",
   "target_company",
@@ -13,6 +15,19 @@
   "last_result"
  ],
  "fields": [
+  {
+   "fieldname": "quoter_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Configuracion del cotizador"
+  },
+  {
+   "fieldname": "default_quote_currency",
+   "fieldtype": "Link",
+   "options": "Currency",
+   "label": "Moneda predeterminada del cotizador",
+   "default": "USD",
+   "description": "Moneda aplicada al iniciar una cotizacion NUEVA y sin lineas mediante el cotizador Microsoft (el ~98.7% del licenciamiento NCE se factura en USD). El usuario puede cambiarla con el campo de moneda nativo de la Quotation. No afecta cotizaciones existentes ni lineas ya capturadas."
+  },
   {
    "fieldname": "intro",
    "fieldtype": "HTML",

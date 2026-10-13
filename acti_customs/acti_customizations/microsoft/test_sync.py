@@ -150,6 +150,15 @@ class TestSync(FrappeTestCase):
 		self.assertNotIn("applied", rep)
 		self.assertEqual(frappe.db.count("Item", {"item_group": ITEM_GROUP}), 0)
 
+	def test_reporte_incluye_detalle_acotado_para_presentacion(self):
+		# El reporte trae `details` con listas de códigos (acotadas a DETAIL_LIMIT) para la UI nativa,
+		# además de los conteos. No inventa métricas: los códigos salen del plan real.
+		rep = sync_microsoft_catalog(self._xlsx([ROW_A, ROW_B]), dry_run=True)
+		self.assertIn("details", rep)
+		self.assertEqual(set(rep["details"]["new"]), {CODE_A, CODE_B})
+		self.assertEqual(rep["items_new"], 2)
+		self.assertLessEqual(len(rep["details"]["new"]), sync_mod.DETAIL_LIMIT)
+
 	# --- compatibilidad con contenido binario (File gestionado, sin ruta local) ---
 	def test_dry_run_desde_contenido_binario(self):
 		"""sync_microsoft_catalog acepta bytes del .xlsx (get_content), no solo una ruta."""
@@ -217,23 +226,71 @@ class TestSync(FrappeTestCase):
 		self.assertEqual(frappe.db.count("Item", {"item_group": ITEM_GROUP}), 2)
 		self.assertEqual(frappe.db.count("Item Price", {"item_code": CODE_A, "price_list": PRICE_LIST}), 1)
 
-	def test_desaparecida_disable_y_cierra_precio(self):
+	def test_retiro_marca_inactivo_sin_deshabilitar_y_cierra_precio(self):
 		if not self._has_company:
 			self.skipTest("Site sin Company.")
 		self._apply([ROW_A, ROW_B])
-		self._apply([ROW_A])  # falta B
-		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 1)
+		rep = self._apply([ROW_A])  # falta B -> retiro comercial
+		# Retiro: fuera de catalogo (ms_catalog_active=0) pero OPERABLE (disabled=0) para facturar.
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "ms_catalog_active"), 0)
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 0)
+		self.assertEqual(rep["applied"]["items_retired"], 1)
 		# su Item Price abierto se cerró (valid_upto no vacío) — conservado, no borrado
 		self.assertTrue(frappe.db.exists("Item Price", {"item_code": CODE_B, "price_list": PRICE_LIST}))
 		self.assertTrue(self._price(CODE_B)[0].valid_upto)
+
+	def test_retirado_sigue_operable_para_facturar(self):
+		"""Un Item retirado (disabled=0) NO dispara 'Item is disabled' en get_item_details/validate_end_of_life,
+		por lo que convertir/facturar compromisos existentes sigue funcionando."""
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		from erpnext.stock.doctype.item.item import validate_end_of_life
+
+		self._apply([ROW_A, ROW_B])
+		self._apply([ROW_A])  # B retirado
+		# No debe lanzar: el Item retirado sigue habilitado para operaciones.
+		validate_end_of_life(CODE_B)  # sin excepcion
 
 	def test_reactivacion(self):
 		if not self._has_company:
 			self.skipTest("Site sin Company.")
 		self._apply([ROW_A, ROW_B])
-		self._apply([ROW_A])  # B desaparece -> disabled
-		self._apply([ROW_A, ROW_B])  # B reaparece
+		self._apply([ROW_A])  # B desaparece -> retirado (active=0, disabled=0)
+		rep = self._apply([ROW_A, ROW_B])  # B reaparece
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "ms_catalog_active"), 1)
 		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 0)
+		self.assertEqual(rep["applied"]["items_reactivated"], 1)
+
+	def test_transicion_dry_run_reporta_sin_escribir(self):
+		"""Regla 3: el Dry Run identifica Items NCE deshabilitados por el sync viejo, sin escribir datos."""
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A, ROW_B])
+		frappe.db.set_value("Item", CODE_B, "disabled", 1)  # simula estado dejado por el sync viejo
+		rep = sync_microsoft_catalog(self._xlsx([ROW_A, ROW_B]), dry_run=True)
+		self.assertEqual(rep["items_needing_transition"], 1)
+		self.assertNotIn("applied", rep)
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 1)  # Dry Run NO escribio
+
+	def test_transicion_apply_en_catalogo_habilita_y_activa(self):
+		"""Item NCE deshabilitado por el sync viejo que SIGUE en catalogo -> disabled=0, ms_catalog_active=1."""
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A, ROW_B])
+		frappe.db.set_value("Item", CODE_B, {"disabled": 1, "ms_catalog_active": 0})  # estado viejo
+		self._apply([ROW_A, ROW_B])  # B sigue presente
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 0)
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "ms_catalog_active"), 1)
+
+	def test_transicion_apply_ausente_habilita_y_retira(self):
+		"""Item NCE deshabilitado por el sync viejo que YA NO esta en catalogo -> disabled=0, ms_catalog_active=0."""
+		if not self._has_company:
+			self.skipTest("Site sin Company.")
+		self._apply([ROW_A, ROW_B])
+		frappe.db.set_value("Item", CODE_B, {"disabled": 1, "ms_catalog_active": 0})  # estado viejo
+		self._apply([ROW_A])  # B ausente
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "disabled"), 0)
+		self.assertEqual(frappe.db.get_value("Item", CODE_B, "ms_catalog_active"), 0)
 
 	# --- selección de Company (pura, determinista) ---
 	def test_resolve_company_una(self):
@@ -282,5 +339,7 @@ class TestSync(FrappeTestCase):
 			}
 		).insert(ignore_permissions=True)
 		rep = self._apply([ROW_A])  # el legacy NO está en el Excel
-		self.assertEqual(rep["items_to_disable"], 0)  # el legacy no cuenta como "desaparecido"
+		self.assertEqual(rep["items_to_retire"], 0)  # el legacy no cuenta como "desaparecido"
 		self.assertEqual(frappe.db.get_value("Item", "LEGACY-NO-NCE-001", "disabled"), 0)  # intacto
+		# legacy sin ms_product_id: el sync NO lo retira (no entra a to_retire); su ms_catalog_active no se baja a 0
+		self.assertNotEqual(frappe.db.get_value("Item", "LEGACY-NO-NCE-001", "ms_catalog_active"), 0)

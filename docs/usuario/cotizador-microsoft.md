@@ -24,6 +24,14 @@ Al abrir el cotizador se resuelve la oferta paso a paso:
 Cuando queda **una sola oferta**, se habilitan la cantidad, el margen y el resumen
 (Costo / Precio / Importe en formato moneda).
 
+> **Moneda predeterminada.** Al abrir el cotizador en una cotización **nueva y sin líneas**, se aplica
+> la moneda predeterminada configurada en *Microsoft Catalog Sync* (por defecto **USD**, la moneda del
+> ~98.7% del licenciamiento NCE). Puedes cambiarla con el **campo de moneda nativo** de la cotización;
+> no se modifica la moneda de cotizaciones existentes ni de líneas ya capturadas.
+>
+> **Ofertas retiradas.** Una oferta retirada del catálogo no aparece en el selector y no puede agregarse
+> a una cotización; los compromisos existentes con esa oferta se siguen facturando normalmente.
+
 ## Dos destinos (excluyentes por acción)
 
 ### Agregar a cotización
