@@ -87,6 +87,12 @@ frappe.ui.form.on("Microsoft Catalog Sync", {
 // defensivo: nunca lanza (msg ausente/parcial → se degrada), para garantizar que SIEMPRE haya mensaje.
 acti_customs.ms_catalog_sync.render_report = function (msg) {
 	const esc = frappe.utils.escape_html;
+	// Entero seguro (null/undefined/""/no numérico → 0). NO usar `frappe.utils.cint`: no existe en el
+	// cliente (cint es un global del desk); en staging lanzaba "frappe.utils.cint is not a function".
+	const toInt = (v) => {
+		const n = parseInt(v, 10);
+		return Number.isNaN(n) ? 0 : n;
+	};
 	msg = msg || {}; // null/undefined → objeto vacío (defensivo; el handler ya filtra, doble resguardo)
 	const a = msg.applied; // presente solo en Apply
 	const is_apply = !!a;
@@ -125,7 +131,7 @@ acti_customs.ms_catalog_sync.render_report = function (msg) {
 		`<div style="flex:1 1 90px;min-width:90px;border:1px solid var(--border-color);
 			border-left:3px solid var(--${color ? color : "border"}-500,var(--border-color));
 			border-radius:6px;padding:6px 10px;margin:4px;text-align:center">
-			<div style="font-size:1.4em;font-weight:600">${frappe.utils.cint(value)}</div>
+			<div style="font-size:1.4em;font-weight:600">${toInt(value)}</div>
 			<div class="text-muted small">${esc(label)}</div>
 		</div>`;
 	const cards =
@@ -162,7 +168,7 @@ acti_customs.ms_catalog_sync.render_report = function (msg) {
 				  } ${__("más")}</div>`
 				: "";
 		return (
-			`<h5 style="margin-top:10px">${esc(label)} (${frappe.utils.cint(total)})</h5>` +
+			`<h5 style="margin-top:10px">${esc(label)} (${toInt(total)})</h5>` +
 			`<table class="table table-bordered table-condensed" style="margin-bottom:2px">${rows}</table>` +
 			more
 		);
