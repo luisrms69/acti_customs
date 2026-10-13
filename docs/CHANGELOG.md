@@ -1,5 +1,16 @@
 # Changelog — acti_customs
 
+## [0.4.1] — 2026-10-13
+
+### Fixed
+- **Microsoft Catalog Sync — "Error in Template" en el texto de ayuda.** El campo HTML `intro` del Single
+  encerraba el nombre de la lista entre comillas simples (`'Microsoft NCE - Compra'`). El motor de
+  plantillas de Frappe (`microtemplate.js`) solo escapa la primera comilla simple de cada segmento, así
+  que el par rompía el literal generado y el render del formulario/Dry Run fallaba con *Error in Template*
+  (`microtemplate.js:91`). Se cambió a comillas dobles. **Solo presentación**: sin cambios en el
+  sincronizador, sus datos ni la lógica del catálogo. Incluye test de regresión que reproduce el render
+  real (porta el algoritmo de `microtemplate.js` y compila el cuerpo con Node).
+
 ## [0.4.0] — 2026-10-13
 
 ### Added

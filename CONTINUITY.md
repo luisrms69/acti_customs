@@ -47,10 +47,14 @@
 
 ## En curso / siguiente
 
-- `v0.4.0` en `/ship pr` (rama `feat/microsoft-currency-and-catalog-retirement` → `version-16`). Tras
-  merge y release: actualizar `acti_customs` en staging, `bench migrate` (previa verificación de la
-  tabla huérfana `Microsoft Offer`), validar moneda/reporte, Dry Run y —con autorización— Apply para
-  normalizar el catálogo.
+- **`v0.4.0` liberado:** PR #7 merged (`5d95b72`), tag + GitHub Release `v0.4.0` publicados; rama feature
+  eliminada; `/sync-check` limpio.
+- **`v0.4.1` en `/ship pr`** (rama `fix/microsoft-catalog-sync-help-text` → `version-16`): fix del texto
+  de ayuda `intro` del Single que rompía el render (`microtemplate.js` no escapa pares de comillas
+  simples) → comillas dobles. Solo presentación; con test de regresión que reproduce el render real.
+- Tras merge/release de v0.4.1: actualizar `acti_customs` en staging, `bench migrate` (previa
+  verificación de la tabla huérfana `Microsoft Offer`), validar moneda/reporte, Dry Run y —con
+  autorización— Apply para normalizar el catálogo.
 
 ## Fuera de alcance (etapas posteriores)
 
