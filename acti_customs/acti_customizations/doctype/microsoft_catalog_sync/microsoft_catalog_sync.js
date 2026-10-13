@@ -11,6 +11,8 @@
 // alcanzable desde el closure del controlador en el bundle del desk; además, el `.catch` del handler
 // debe SURFACEAR el error (no tragarlo), para que el usuario siempre vea un resultado comprensible.
 
+/* global acti_customs */
+
 frappe.provide("acti_customs.ms_catalog_sync");
 
 frappe.ui.form.on("Microsoft Catalog Sync", {
